@@ -143,6 +143,42 @@ struct State {
     listening: Option<String>,
 }
 
+/// Collects the scanned QR parts of one pairing. Holds only public bytes.
+/// Make a new one for each scan; a finished or abandoned set is never reused.
+#[derive(uniffi::Object)]
+pub struct PairingAssembler {
+    inner: Mutex<pairing::Assembler>,
+}
+
+#[uniffi::export]
+impl PairingAssembler {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: Mutex::new(pairing::Assembler::new()),
+        })
+    }
+
+    /// Adds one scanned part. Returns the full payload once every part is in;
+    /// pass that to `Messenger::scan_pairing`. A refused part changes nothing.
+    pub fn add_part(&self, part: Vec<u8>) -> Result<Option<Vec<u8>>, FacadeError> {
+        let mut asm = self.inner.lock().map_err(|_| FacadeError::Internal)?;
+        Ok(asm.add(&part)?)
+    }
+
+    /// Distinct parts accepted so far.
+    pub fn received(&self) -> Result<u8, FacadeError> {
+        let asm = self.inner.lock().map_err(|_| FacadeError::Internal)?;
+        Ok(asm.received())
+    }
+
+    /// Parts in the set, or 0 before the first part.
+    pub fn total(&self) -> Result<u8, FacadeError> {
+        let asm = self.inner.lock().map_err(|_| FacadeError::Internal)?;
+        Ok(asm.total())
+    }
+}
+
 /// One local user. Dropping it wipes every key and message it holds.
 #[derive(uniffi::Object)]
 pub struct Messenger {
@@ -179,6 +215,14 @@ impl Messenger {
     pub fn own_pairing_payload(&self, connection_hint: String) -> Result<Vec<u8>, FacadeError> {
         let st = self.lock()?;
         Ok(pairing::encode(&st.public, &connection_hint)?)
+    }
+
+    /// The QR parts for this identity, in order. Each part is one QR code; the
+    /// scanner must collect all of them (see `PairingAssembler`) before pinning.
+    pub fn own_pairing_parts(&self, connection_hint: String) -> Result<Vec<Vec<u8>>, FacadeError> {
+        let st = self.lock()?;
+        let payload = pairing::encode(&st.public, &connection_hint)?;
+        Ok(pairing::split(&payload)?)
     }
 
     /// Fingerprint of this identity, shown so the two users can compare it in person.

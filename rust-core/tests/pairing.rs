@@ -3,7 +3,8 @@
 //! refused with its own error. Pins live in RAM and survive `forget` and
 //! `wipe_all`, so a later QR cannot silently replace a trusted key.
 
-use rust_core::ffi::{FacadeError, Messenger};
+use rust_core::ffi::{FacadeError, Messenger, PairingAssembler};
+use rust_core::pairing::PART_HEADER_LEN as PAIRING_PART_HEADER_LEN;
 
 fn scan_of(m: &Messenger) -> Vec<u8> {
     m.own_pairing_payload(String::new()).unwrap()
@@ -196,4 +197,65 @@ fn each_messenger_generates_its_own_identity() {
     assert_eq!(ia.mlkem_ek.len(), 1184);
     assert_ne!(ia.x25519, ib.x25519);
     assert_ne!(ia.mlkem_ek, ib.mlkem_ek);
+}
+fn parts_of_bob(bob: &Messenger) -> Vec<Vec<u8>> {
+    bob.own_pairing_parts(String::new()).unwrap()
+}
+
+#[test]
+fn one_part_alone_does_not_pin() {
+    let alice = Messenger::new();
+    let bob = Messenger::new();
+    let parts = parts_of_bob(&bob);
+    let asm = PairingAssembler::new();
+    assert_eq!(asm.add_part(parts[0].clone()).unwrap(), None);
+    assert_eq!(alice.pin_fingerprint("bob".into()).unwrap(), None);
+    assert!(alice.pinned_peers().unwrap().is_empty());
+    // A lone part is not a payload: scanning it directly is refused too.
+    assert_eq!(
+        alice.scan_pairing("bob".into(), parts[0].clone()),
+        Err(FacadeError::Malformed)
+    );
+}
+
+#[test]
+fn all_parts_pin_the_identity() {
+    let alice = Messenger::new();
+    let bob = Messenger::new();
+    let asm = PairingAssembler::new();
+    let mut full = None;
+    for part in parts_of_bob(&bob) {
+        full = asm.add_part(part).unwrap();
+    }
+    assert_eq!(asm.received().unwrap(), 2);
+    let shown = alice
+        .scan_pairing("bob".into(), full.unwrap())
+        .unwrap()
+        .fingerprint;
+    assert_eq!(shown, bob.own_fingerprint().unwrap());
+}
+
+#[test]
+fn tampered_part_does_not_pin() {
+    let alice = Messenger::new();
+    let bob = Messenger::new();
+    let mut parts = parts_of_bob(&bob);
+    parts[0][PAIRING_PART_HEADER_LEN + 20] ^= 1;
+    let asm = PairingAssembler::new();
+    assert_eq!(asm.add_part(parts[0].clone()).unwrap(), None);
+    assert_eq!(asm.add_part(parts[1].clone()), Err(FacadeError::Malformed));
+    assert_eq!(alice.pin_fingerprint("bob".into()).unwrap(), None);
+}
+
+#[test]
+fn parts_from_two_identities_are_not_mixed() {
+    let bob = Messenger::new();
+    let carol = Messenger::new();
+    let asm = PairingAssembler::new();
+    asm.add_part(parts_of_bob(&bob)[0].clone()).unwrap();
+    assert_eq!(
+        asm.add_part(parts_of_bob(&carol)[1].clone()),
+        Err(FacadeError::Malformed)
+    );
+    assert_eq!(asm.received().unwrap(), 1);
 }

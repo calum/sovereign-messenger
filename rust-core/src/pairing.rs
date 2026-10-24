@@ -74,6 +74,121 @@ pub fn fingerprint(public: &IdentityPublic) -> String {
         .join("-")
 }
 
+/// Number of QR codes one pairing payload is split into. A payload of about 1.2 KB
+/// as one code is version 27, which fails to decode about 7% of the time (PLAN.md
+/// Decisions, 2026-10-24, QR decode). Two codes of about 0.6 KB decode reliably.
+pub const PART_COUNT: u8 = 2;
+
+/// Part header: index (1 byte), count (1 byte), payload id (8 bytes). The chunk follows.
+pub const PART_HEADER_LEN: usize = 2 + ID_LEN;
+const ID_LEN: usize = 8;
+const PART_ID_DOMAIN: &[u8] = b"sovereign-p2p v1 pairing part id";
+
+/// Splits an encoded pairing payload into `PART_COUNT` QR parts. Each part carries
+/// its index, the total, and an id that is a hash of the whole payload. The id ties
+/// the parts to one identity and lets reassembly detect any tampering.
+/// The payload must be a valid pairing payload; anything else is refused.
+pub fn split(payload: &[u8]) -> Result<Vec<Vec<u8>>, CoreError> {
+    decode(payload)?;
+    let id = payload_id(payload);
+    let chunk_len = payload.len().div_ceil(PART_COUNT as usize);
+    Ok(payload
+        .chunks(chunk_len)
+        .enumerate()
+        .map(|(index, chunk)| {
+            let mut part = Vec::with_capacity(PART_HEADER_LEN + chunk.len());
+            part.push(index as u8);
+            part.push(PART_COUNT);
+            part.extend_from_slice(&id);
+            part.extend_from_slice(chunk);
+            part
+        })
+        .collect())
+}
+
+/// Collects scanned parts until the full payload is complete. Parts for another
+/// payload, a duplicate, or a bad header are refused and change nothing. A set
+/// that completes but does not match its id is discarded, so a tampered part
+/// cannot produce a payload that pins.
+#[derive(Default)]
+pub struct Assembler {
+    id: Option<[u8; ID_LEN]>,
+    chunks: Vec<Option<Vec<u8>>>,
+}
+
+impl Assembler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of distinct parts accepted so far.
+    pub fn received(&self) -> u8 {
+        self.chunks.iter().filter(|c| c.is_some()).count() as u8
+    }
+
+    /// Number of parts in the set, or 0 before the first part.
+    pub fn total(&self) -> u8 {
+        self.chunks.len() as u8
+    }
+
+    /// Adds one scanned part. Returns the full payload once every part is in and
+    /// the joined bytes match the id. Returns `Ok(None)` while parts are still missing.
+    pub fn add(&mut self, part: &[u8]) -> Result<Option<Vec<u8>>, CoreError> {
+        if part.len() <= PART_HEADER_LEN {
+            return Err(CoreError::Malformed);
+        }
+        let index = part[0] as usize;
+        let count = part[1];
+        if count != PART_COUNT || index >= count as usize {
+            return Err(CoreError::Malformed);
+        }
+        let mut id = [0u8; ID_LEN];
+        id.copy_from_slice(&part[2..PART_HEADER_LEN]);
+        match self.id {
+            Some(existing) if existing != id => return Err(CoreError::Malformed),
+            Some(_) => {}
+            None => {
+                self.id = Some(id);
+                self.chunks = vec![None; count as usize];
+            }
+        }
+        if self.chunks[index].is_some() {
+            return Err(CoreError::Malformed);
+        }
+        self.chunks[index] = Some(part[PART_HEADER_LEN..].to_vec());
+        if self.chunks.iter().any(Option::is_none) {
+            return Ok(None);
+        }
+        let payload: Vec<u8> = self.chunks.iter().flatten().flatten().copied().collect();
+        if Some(payload_id(&payload)) != self.id || decode(&payload).is_err() {
+            *self = Self::default();
+            return Err(CoreError::Malformed);
+        }
+        Ok(Some(payload))
+    }
+}
+
+/// Reassembles a complete set of parts. Refuses a missing part, a duplicate, and any
+/// part from a different payload or with a bad header.
+pub fn reassemble(parts: &[Vec<u8>]) -> Result<Vec<u8>, CoreError> {
+    let mut asm = Assembler::new();
+    let mut complete = None;
+    for part in parts {
+        complete = asm.add(part)?;
+    }
+    complete.ok_or(CoreError::Malformed)
+}
+
+fn payload_id(payload: &[u8]) -> [u8; ID_LEN] {
+    let mut h = Sha256::new();
+    h.update(PART_ID_DOMAIN);
+    h.update(payload);
+    let digest = h.finalize();
+    let mut id = [0u8; ID_LEN];
+    id.copy_from_slice(&digest[..ID_LEN]);
+    id
+}
+
 fn is_valid_hint(hint: &str) -> bool {
     hint.len() <= MAX_HINT_LEN && hint.bytes().all(|b| (0x20..=0x7e).contains(&b))
 }
@@ -158,5 +273,98 @@ mod tests {
         assert_eq!(fingerprint(&a), fingerprint(&a));
         assert_ne!(fingerprint(&a), fingerprint(&b));
         assert_eq!(fingerprint(&a).len(), 39); // 32 hex digits in 8 groups of 4, joined by '-'
+    }
+
+    fn parts_of(public: &IdentityPublic) -> Vec<Vec<u8>> {
+        split(&encode(public, "h").unwrap()).unwrap()
+    }
+
+    #[test]
+    fn split_parts_reassemble_to_the_payload() {
+        let payload = encode(&sample(), "10.0.0.2:7000").unwrap();
+        let parts = split(&payload).unwrap();
+        assert_eq!(parts.len(), PART_COUNT as usize);
+        assert_eq!(reassemble(&parts).unwrap(), payload);
+    }
+
+    #[test]
+    fn parts_arrive_in_any_order() {
+        let payload = encode(&sample(), "h").unwrap();
+        let mut parts = split(&payload).unwrap();
+        parts.reverse();
+        assert_eq!(reassemble(&parts).unwrap(), payload);
+    }
+
+    #[test]
+    fn missing_part_is_refused() {
+        let parts = parts_of(&sample());
+        assert_eq!(reassemble(&parts[..1]), Err(CoreError::Malformed));
+        assert_eq!(reassemble(&parts[1..]), Err(CoreError::Malformed));
+    }
+
+    #[test]
+    fn duplicated_part_is_refused() {
+        let parts = parts_of(&sample());
+        assert_eq!(
+            reassemble(&[parts[0].clone(), parts[0].clone()]),
+            Err(CoreError::Malformed)
+        );
+    }
+
+    #[test]
+    fn part_from_another_payload_is_refused() {
+        let a = parts_of(&sample());
+        let b = parts_of(&sample());
+        assert_eq!(
+            reassemble(&[a[0].clone(), b[1].clone()]),
+            Err(CoreError::Malformed)
+        );
+    }
+
+    #[test]
+    fn mismatched_part_leaves_the_assembler_unchanged() {
+        let a = parts_of(&sample());
+        let b = parts_of(&sample());
+        let mut asm = Assembler::new();
+        assert_eq!(asm.add(&a[0]), Ok(None));
+        assert_eq!(asm.add(&b[1]), Err(CoreError::Malformed));
+        assert_eq!(asm.received(), 1);
+        assert!(asm.add(&a[1]).unwrap().is_some());
+    }
+
+    #[test]
+    fn out_of_range_index_or_count_is_refused() {
+        let parts = parts_of(&sample());
+        let mut bad_index = parts[0].clone();
+        bad_index[0] = PART_COUNT;
+        assert_eq!(
+            reassemble(&[bad_index, parts[1].clone()]),
+            Err(CoreError::Malformed)
+        );
+        let mut bad_count = parts[0].clone();
+        bad_count[1] = PART_COUNT + 1;
+        assert_eq!(
+            reassemble(&[bad_count, parts[1].clone()]),
+            Err(CoreError::Malformed)
+        );
+    }
+
+    #[test]
+    fn tampered_part_does_not_reassemble_into_a_payload() {
+        let public = sample();
+        let parts = parts_of(&public);
+        // Flip a bit inside the X25519 key. The result still parses, so only the id check catches it.
+        let mut tampered = parts[0].clone();
+        tampered[PART_HEADER_LEN + 20] ^= 1;
+        assert_eq!(
+            reassemble(&[tampered, parts[1].clone()]),
+            Err(CoreError::Malformed)
+        );
+    }
+
+    #[test]
+    fn old_single_code_payload_is_refused_not_misread() {
+        let payload = encode(&sample(), "h").unwrap();
+        assert_eq!(Assembler::new().add(&payload), Err(CoreError::Malformed));
     }
 }

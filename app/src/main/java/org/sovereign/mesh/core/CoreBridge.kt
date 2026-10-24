@@ -2,6 +2,7 @@ package org.sovereign.mesh.core
 
 import uniffi.rust_core.LockReport
 import uniffi.rust_core.Messenger
+import uniffi.rust_core.PairingAssembler
 
 /**
  * Kotlin side of the Rust core. The Rust `Messenger` is the only holder of
@@ -59,6 +60,12 @@ class CoreBridge(private val messenger: Messenger = Messenger()) {
 
     /** Payload bytes for this phone's QR code. Built by rust-core; Kotlin only renders them. */
     fun ownPairingPayload(): ByteArray = messenger.ownPairingPayload("")
+
+    /** The QR parts for this phone's code. Show each one as its own QR code. */
+    fun ownPairingParts(): List<ByteArray> = messenger.ownPairingParts("")
+
+    /** A fresh collector for one scan. Feed it every scanned part; it returns the payload when complete. */
+    fun newPairingAssembler(): PairingAssembler = PairingAssembler()
 
     fun ownFingerprint(): String = messenger.ownFingerprint()
 
