@@ -58,6 +58,30 @@ android {
     }
 }
 
+// The UniFFI Kotlin bindings call rust-core through JNA. Android needs the
+// @aar artifact (bundles the per-ABI JNI shim); the JVM test needs the plain jar.
+val jnaVersion = "5.16.0"
+
+// Host build of rust-core for JVM unit tests. UniFFI's generated code loads the
+// library by path from this system property instead of by platform name.
+val rustCoreDir = rootProject.file("rust-core")
+val hostLibFile = when {
+    System.getProperty("os.name").startsWith("Windows") -> "rust_core.dll"
+    System.getProperty("os.name").startsWith("Mac") -> "librust_core.dylib"
+    else -> "librust_core.so"
+}
+val cargoBuildHost by tasks.registering(Exec::class) {
+    workingDir = rootProject.projectDir
+    commandLine("cargo", "build", "--manifest-path", "rust-core/Cargo.toml", "--lib")
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(cargoBuildHost)
+    systemProperty(
+        "uniffi.component.rust_core.libraryOverride",
+        rustCoreDir.resolve("target/debug/$hostLibFile").absolutePath,
+    )
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)
@@ -67,5 +91,18 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("net.java.dev.jna:jna:$jnaVersion@aar")
+    // QR encode and decode (core only, no Android-specific ZXing). Released 2024-01-31.
+    implementation("com.google.zxing:core:3.5.3")
+    // CameraX for the pairing scanner. 1.4.2 (published 2025-03-26) works with AGP 8.7.3
+    // and compileSdk 35; 1.6.x needs AGP 8.9.1 and compileSdk 36, so it is not used.
+    val cameraVersion = "1.4.2"
+    implementation("androidx.camera:camera-core:$cameraVersion")
+    implementation("androidx.camera:camera-camera2:$cameraVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraVersion")
+    implementation("androidx.camera:camera-view:$cameraVersion")
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("net.java.dev.jna:jna:$jnaVersion")
 }

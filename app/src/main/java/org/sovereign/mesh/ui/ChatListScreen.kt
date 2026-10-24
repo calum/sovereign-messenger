@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -17,7 +19,7 @@ import androidx.compose.ui.unit.dp
 import org.sovereign.mesh.SovereignApp
 
 @Composable
-fun ChatListScreen(onOpenChat: (String) -> Unit) {
+fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: () -> Unit) {
     val peers = SovereignApp.core.peers()
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -26,6 +28,13 @@ fun ChatListScreen(onOpenChat: (String) -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Secured P2P Mesh", style = MaterialTheme.typography.titleLarge)
+        }
+        P2pMeshIndicator(peer = null, modifier = Modifier.padding(top = 4.dp))
+        Button(onClick = onPair, modifier = Modifier.padding(top = 8.dp)) {
+            Text("Pair a contact")
+        }
+        OutlinedButton(onClick = onUpdate, modifier = Modifier.padding(top = 8.dp)) {
+            Text("Updates")
         }
 
         if (peers.isEmpty()) {

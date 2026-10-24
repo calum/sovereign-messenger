@@ -10,6 +10,10 @@ pub enum CoreError {
     BadSignature,
     #[error("key pin mismatch")]
     PinMismatch,
+    #[error("identity already pinned")]
+    DuplicatePin,
     #[error("memory lock failed")]
     Lock,
+    #[error("network error")]
+    Network,
 }
