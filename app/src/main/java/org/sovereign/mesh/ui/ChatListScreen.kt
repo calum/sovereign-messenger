@@ -29,6 +29,7 @@ fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: (
         ) {
             Text("Secured P2P Mesh", style = MaterialTheme.typography.titleLarge)
         }
+        P2pMeshIndicator(peer = null, modifier = Modifier.padding(top = 4.dp))
         Button(onClick = onPair, modifier = Modifier.padding(top = 8.dp)) {
             Text("Pair a contact")
         }

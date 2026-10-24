@@ -685,7 +685,11 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_history(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_linked_peers(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_listen_for_peer(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_listening_peer(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_lock_report(
     ): Int
@@ -759,8 +763,12 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_history(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_linked_peers(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_listen_for_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,`bindAddr`: RustBuffer.ByValue,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_listening_peer(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_lock_report(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_own_fingerprint(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -929,7 +937,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_history() and 0xFFFF) != 16097) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_linked_peers() and 0xFFFF) != 57294) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_method_messenger_listen_for_peer() and 0xFFFF) != 38529) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_listening_peer() and 0xFFFF) != 12710) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_lock_report() and 0xFFFF) != 17259) {
@@ -1420,10 +1434,21 @@ public interface MessengerInterface {
     fun `history`(`peerId`: kotlin.String): List<kotlin.String>
     
     /**
+     * Peers whose session holds a live connection, sorted. An in-process session
+     * has no socket and is left out, so it never reads as connected.
+     */
+    fun `linkedPeers`(): List<kotlin.String>
+    
+    /**
      * Binds `bind_addr` and waits up to `timeout_secs` for one peer to connect.
      * Blocks the calling thread; the app runs it off the UI thread.
      */
     fun `listenForPeer`(`peerId`: kotlin.String, `bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt)
+    
+    /**
+     * The peer a listener is waiting for, or `None` when no listener is up.
+     */
+    fun `listeningPeer`(): kotlin.String?
     
     /**
      * Reports whether `mlock` took effect. The core cannot stop the OS from
@@ -1734,6 +1759,24 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
+     * Peers whose session holds a live connection, sorted. An in-process session
+     * has no socket and is left out, so it never reads as connected.
+     */
+    @Throws(FacadeException::class)override fun `linkedPeers`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_linked_peers(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Binds `bind_addr` and waits up to `timeout_secs` for one peer to connect.
      * Blocks the calling thread; the app runs it off the UI thread.
      */
@@ -1750,6 +1793,23 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 }
     }
     
+    
+
+    
+    /**
+     * The peer a listener is waiting for, or `None` when no listener is up.
+     */
+    @Throws(FacadeException::class)override fun `listeningPeer`(): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_listening_peer(
+        it,
+        _status)
+}
+    }
+    )
+    }
     
 
     

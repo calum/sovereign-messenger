@@ -2,7 +2,7 @@
 
 This plan is updated as work is done. Checked items are verified in the repo; unchecked items are not started or not verified. Each change to the plan should say what changed and why.
 
-_Last updated: 2026-10-24 (section 6: hardening review; `docs/hardening-review.md`)._
+_Last updated: 2026-10-24 (section 7: P2P mesh indicator and tour walkthrough; `docs/usability-walkthrough.md`)._
 
 ## Done
 
@@ -69,8 +69,8 @@ Findings and evidence are in `docs/hardening-review.md`.
 - [ ] Independent review of the cryptographic design before anyone relies on it. NOT DONE: no independent party here. The points for the reviewer are in `docs/hardening-review.md`, section 5. Left unticked.
 
 ### 7. Usability
-- [ ] Verify the tour and chat flow on a phone
-- [ ] Add the discreet "Secured P2P Mesh" status indicator with real state
+- [ ] Verify the tour and chat flow on a phone. Left unticked: no phone or emulator was available, so nothing was run on a device. The code walkthrough and the open human checks are in `docs/usability-walkthrough.md`.
+- [x] Add the discreet "Secured P2P Mesh" status indicator with real state (JVM mapping test `MeshStatusTest`, Rust accessor tests `rust-core/tests/mesh_state.rs`; the indicator is wired into the chat list and chat screen headers; not rendered on a device)
 
 ### 8. User testing (owner)
 - [ ] Owner installs the pre-release APK and tests it for security, privacy and ease of use
@@ -120,3 +120,8 @@ Findings and evidence are in `docs/hardening-review.md`.
 - **2026-10-24, `munlock` is recorded as an open problem:** Ruling: finding F2 in `docs/hardening-review.md` is recorded, not fixed in this pass. Why: Linux locks per page and `munlock` is not reference counted, so one drop can unlock a live neighbour. Reproducing it needs Linux, which this host lacks, and both fixes change allocation or unlock behaviour. Options: (a) page-granular secret allocation, or (b) stop unlocking. Cost if wrong: a live stored message can lose its page lock, and `is_locked` then over-reports. The owner must choose before a device run.
 - **2026-10-24, the countdown is a tested function:** Ruling: the retention formatting moved to `formatRetention` in `ui/ChatScreen.kt`, with JVM tests. Why: formatting is pure logic, and only a plain function can be unit-tested without Compose. Cost if wrong: none found; the displayed text is unchanged.
 - **2026-10-24, the signed update format has no version or rollback field:** Ruling: left as it is and flagged for independent review. Why: the owner's design signs the APK bytes only, and a change needs a new wire format. Cost if wrong: a validly signed older APK verifies in the app; Android's installer is expected to refuse a downgrade for a non-debuggable app, which is not verified here.
+- **2026-10-24, P2P mesh state comes from the core:** Ruling: the header indicator reads `peers()`, a new `linkedPeers()` (sessions that hold a live socket) and a new `listeningPeer()` (the peer a `listen_for_peer` call is waiting for). It keeps no connection flags of its own, and `meshStatus` in `core/MeshStatus.kt` maps those answers to a label and an enum. Why: the owner asked for real state, and an in-process session with no socket must not read as connected. Cost if wrong: the indicator re-reads the core every second, so a slow core lock delays the label; the FFI gains two methods (bindings regenerated, additive only).
+- **2026-10-24, the indicator says only what is connected:** Ruling: the labels are "P2P mesh: connected", "P2P mesh: waiting for contact", "P2P mesh: not connected" and "P2P mesh: no session". Why: the core has no single "secured" flag, and it reports sockets and sessions, not whether a link is verified end to end. The transport is plain TCP on the local network, so "secured" or "encrypted" would be a claim the app cannot back up (CLAUDE.md rule 7). The JVM test checks that no label contains those words. Cost if wrong: the labels are plain and may reassure less; the existing title "Secured P2P Mesh" is unchanged and still needs review before release.
+- **2026-10-24, a listener is cleared on every exit:** Ruling: `listen_for_peer` marks the listener before it binds and clears the mark after success, timeout, a refused pin or a failed handshake. Why: a listener that has stopped must not show as waiting. Cost if wrong: a panic inside the accept path skips the clear, so the mark would stay set until the process ends.
+- **2026-10-24, tour card 1 says "Tor" and was not changed:** Ruling: `TourScreen.kt` still says the phone talks "over Tor onion services". It is flagged in `docs/usability-walkthrough.md` and was not edited, because this pass was limited to the two items and the wording is the owner's to choose. Why: there is no Tor transport (CLAUDE.md, Known gaps). Cost if wrong: new users are told traffic goes over Tor, which is false, until the copy changes. This breaks CLAUDE.md rule 7, and the owner should decide the replacement wording before the next pre-release.
+- **2026-10-24, rotation may clear every chat:** Ruling: not changed; flagged for a device check. Why: the manifest declares no `configChanges`, so a rotation recreates the activity and Android runs `onStop`, which calls `wipeAll()`. This is from reading the code, not from a device. Cost if wrong: a rotation clears every chat and returns the user to the list. Options for the owner: handle config changes in the manifest, or accept the wipe as the RAM-only rule and say so on the screen.

@@ -95,6 +95,7 @@ fun ChatScreen(peer: String, onBack: () -> Unit) {
                 style = MaterialTheme.typography.labelMedium,
             )
         }
+        P2pMeshIndicator(peer = peer, modifier = Modifier.padding(top = 4.dp))
 
         status?.let { Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 4.dp)) }
 

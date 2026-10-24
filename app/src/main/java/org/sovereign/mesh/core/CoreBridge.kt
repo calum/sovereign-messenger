@@ -16,6 +16,12 @@ class CoreBridge(private val messenger: Messenger = Messenger()) {
 
     fun peers(): List<String> = messenger.peers()
 
+    /** Peers whose session has a live socket. Read by the P2P mesh indicator. */
+    fun linkedPeers(): List<String> = messenger.linkedPeers()
+
+    /** The peer a listener is waiting for, or null. Read by the P2P mesh indicator. */
+    fun listeningPeer(): String? = messenger.listeningPeer()
+
     /** Seals [text] and sends it over the open connection to [peer]. Blocking. */
     fun send(peer: String, text: String) {
         messenger.sendOverTransport(peer, text)

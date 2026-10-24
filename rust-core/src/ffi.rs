@@ -138,6 +138,9 @@ struct State {
     /// Survives `forget` and `wipe_all` so a later QR cannot replace a key.
     pins: HashMap<String, IdentityPublic>,
     store: Store,
+    /// The peer a `listen_for_peer` call is waiting for, set only while it runs.
+    /// Lets the UI show that a listener is up without a second source of truth.
+    listening: Option<String>,
 }
 
 /// One local user. Dropping it wipes every key and message it holds.
@@ -159,6 +162,7 @@ impl Messenger {
                 sessions: HashMap::new(),
                 pins: HashMap::new(),
                 store: Store::new(),
+                listening: None,
             }),
         })
     }
@@ -347,24 +351,32 @@ impl Messenger {
             .pins
             .get(&peer_id)
             .ok_or(FacadeError::NotPinned)?;
-        let listener = TcpListener::bind(&bind_addr).map_err(|_| FacadeError::Network)?;
-        let link: Arc<dyn Transport> = Arc::new(
-            TcpTransport::accept(&listener, Duration::from_secs(u64::from(timeout_secs)))
-                .map_err(|_| FacadeError::Network)?,
-        );
-        drop(listener); // one peer per listen call
-        let init = wire::receive_handshake(link.as_ref())?;
-        let mut st = self.lock()?;
-        let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
-        let root = handshake::respond(&st.identity, &pinned, &init)?;
-        let session = session_for(
-            &root,
-            RESPONDER_TO_INITIATOR,
-            INITIATOR_TO_RESPONDER,
-            Some(link),
-        );
-        st.sessions.insert(peer_id, Arc::new(session));
-        Ok(())
+        self.lock()?.listening = Some(peer_id.clone());
+        let result = self.accept_one(peer_id, &bind_addr, timeout_secs);
+        // Cleared on every exit, so a failed or timed-out listen never reads as "listening".
+        if let Ok(mut st) = self.lock() {
+            st.listening = None;
+        }
+        result
+    }
+
+    /// Peers whose session holds a live connection, sorted. An in-process session
+    /// has no socket and is left out, so it never reads as connected.
+    pub fn linked_peers(&self) -> Result<Vec<String>, FacadeError> {
+        let st = self.lock()?;
+        let mut peers: Vec<String> = st
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.link.is_some())
+            .map(|(peer, _)| peer.clone())
+            .collect();
+        peers.sort();
+        Ok(peers)
+    }
+
+    /// The peer a listener is waiting for, or `None` when no listener is up.
+    pub fn listening_peer(&self) -> Result<Option<String>, FacadeError> {
+        Ok(self.lock()?.listening.clone())
     }
 
     /// Seals `text` and sends it over the peer's open connection. Records it
@@ -494,6 +506,34 @@ impl Messenger {
             .get(peer_id)
             .cloned()
             .ok_or(FacadeError::NoSession)
+    }
+
+    /// Binds `bind_addr`, accepts one connection and runs the responder side of
+    /// the handshake. Called only from `listen_for_peer`, which tracks the listener.
+    fn accept_one(
+        &self,
+        peer_id: String,
+        bind_addr: &str,
+        timeout_secs: u32,
+    ) -> Result<(), FacadeError> {
+        let listener = TcpListener::bind(bind_addr).map_err(|_| FacadeError::Network)?;
+        let link: Arc<dyn Transport> = Arc::new(
+            TcpTransport::accept(&listener, Duration::from_secs(u64::from(timeout_secs)))
+                .map_err(|_| FacadeError::Network)?,
+        );
+        drop(listener); // one peer per listen call
+        let init = wire::receive_handshake(link.as_ref())?;
+        let mut st = self.lock()?;
+        let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
+        let root = handshake::respond(&st.identity, &pinned, &init)?;
+        let session = session_for(
+            &root,
+            RESPONDER_TO_INITIATOR,
+            INITIATOR_TO_RESPONDER,
+            Some(link),
+        );
+        st.sessions.insert(peer_id, Arc::new(session));
+        Ok(())
     }
 }
 
