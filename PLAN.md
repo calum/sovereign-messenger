@@ -20,10 +20,12 @@ _Last updated: 2026-10-24._
 - [x] Release APK builds, is signed, has `allowBackup=false`, is not debuggable
 - [x] `README.md`, `CLAUDE.md`, `llm.txt`
 
+- [x] Public GitHub repository and first push: https://github.com/calum/sovereign-messenger
+- [x] Release APK published as a pre-release: https://github.com/calum/sovereign-messenger/releases/tag/v0.1.0-experimental (`v0.1.0-experimental`, SHA-256 in the release notes)
+
 ## In progress
 
-- [ ] Public GitHub repository and first push
-- [ ] Publish the release APK as a GitHub release marked **pre-release / experimental**
+- [ ] Owner testing of the pre-release (see section 8)
 
 ## Left to do
 
