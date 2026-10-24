@@ -4,6 +4,7 @@
 pub mod error;
 pub mod ffi;
 pub mod handshake;
+pub mod pairing;
 pub mod ratchet;
 pub mod secret;
 pub mod store;

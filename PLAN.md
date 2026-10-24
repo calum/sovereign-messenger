@@ -37,10 +37,10 @@ _Last updated: 2026-10-24._
 - [x] Add a JVM or instrumented test that round-trips a message through the real core. Verified: 5 JVM tests in `app/src/test` run the host `rust-core` through JNA; 7 Rust integration tests in `rust-core/tests/round_trip.rs`.
 
 ### 2. Onboarding and identity
-- [ ] Identity generation on first launch (kept in RAM only, so it is lost on close; decide and document the consequence)
-- [ ] QR code generator carrying the identity public key, the ephemeral handshake key, and local connection info
-- [ ] QR scanner, with the scanned identity pinned (TOFU) and the pin shown to the user
-- [ ] Clear error state when a pinned key changes
+- [x] Identity generation on first launch (kept in RAM only, so it is lost on close; decide and document the consequence). Verified: `Messenger::new` makes a fresh identity per object (test `each_messenger_generates_its_own_identity`); `SovereignApp.onCreate` creates it at process start; no code path writes it to disk. Consequence in Decisions (2026-10-24, identity lifetime).
+- [ ] QR code generator carrying the identity public key, the ephemeral handshake key, and local connection info. Partly done: Rust builds and parses the payload (tests in `pairing.rs`); Kotlin encodes and renders it, and a JVM test round-trips it through ZXing (`PairingCodecTest`). Not done: the ephemeral handshake key is not in the payload (Decisions, 2026-10-24). Not seen on a device.
+- [ ] QR scanner, with the scanned identity pinned (TOFU) and the pin shown to the user. Partly done: pinning, validation and the pin display are tested in Rust (`tests/pairing.rs`, 12 tests) and the pairing screen shows the fingerprint. The CameraX scanner compiles but has not been run on a device.
+- [ ] Clear error state when a pinned key changes. Partly done: the core refuses the new key with a distinct `PinChanged` variant and no key in the message (tests); the warning card with explicit accept compiles. Not seen on a device.
 
 ### 3. Transport
 - [ ] Choose the Tor implementation (arti is the leading Rust option; onion-service support is experimental, so check it first)
@@ -73,6 +73,13 @@ _Last updated: 2026-10-24._
 - [ ] Owner reports findings; the plan is updated from them
 
 ## Decisions
+
+- **2026-10-24, identity lifetime:** the identity is generated when the process starts (`SovereignApp` creates `CoreBridge`, which creates `Messenger`) and is never written to disk. Closing the app discards it, so every contact must scan a new QR code after a cold start. Cost if wrong: more pairing for the user; the key is not stored anywhere, so storage cannot leak it.
+- **2026-10-24, QR payload format v1:** magic `SMQR`, version byte `1`, X25519 public key (32 bytes), ML-KEM-768 encapsulation key (1184 bytes), one length byte, then a connection hint of up to 64 printable ASCII characters. Rust builds and parses the bytes (`rust-core/src/pairing.rs`); Kotlin maps each byte to one ISO-8859-1 character, encodes byte mode with error correction L, and does not interpret the payload. The payload is about 1.2 KB, so the code is dense. Cost if wrong: a new layout needs a new version byte, and old codes are refused, not misread.
+- **2026-10-24, TOFU pin policy:** a scanned QR code, or the first `start_session` for a label, pins that identity under the caller's label. A different key for a pinned label is refused with `PinChanged`. A second scan of the same key is refused with `DuplicatePin`. The only way to accept a new key is an explicit `unpin` in the UI, after the fingerprint is checked in person. Pins survive `forget` and `wipe_all`, so a later QR code cannot silently replace a trusted key; they are lost when the process ends. Cost if wrong: a user must re-check fingerprints in person after each cold start; a wrong pin is shown as a fingerprint, so it can be compared.
+- **2026-10-24, ephemeral handshake key is not in the QR yet:** section 2 asked for one. The handshake still uses the identity keys from section 1. Adding a separate ephemeral key now would be unused key material, which CLAUDE.md rule 6 forbids. It belongs with the transport in section 3, where handshake messages are exchanged. Cost if wrong: the QR lacks one key until section 3; a new payload version is then needed.
+- **2026-10-24, scanner libraries:** ZXing `com.google.zxing:core` 3.5.3 (published 2024-01-31) for encode and decode, and CameraX 1.4.2 (published 2025-03-26) for the camera. CameraX 1.6.x requires AGP 8.9.1 and compileSdk 36, which this build does not have, so it was not used. The camera permission is requested at runtime when the scanner opens, and the manifest marks the camera feature as optional. Cost if wrong: decode may be slow or fail on some phones; not tested on a device. CameraX can be bumped only with an AGP upgrade.
+- **2026-10-24, pinned-key-changed behaviour:** rust-core refuses the new key before any session is created and returns `FacadeException.PinChanged`, whose message names no key. The UI shows a warning with "Keep old key" as the default and "Accept new key" as a separate tap that removes the pin; the user must then scan again. Cost if wrong: a user who taps "Accept new key" without checking in person lets an attacker replace the pin; the warning says to check first.
 
 - **Repository visibility:** public, labelled experimental. Owner chose this.
 - **Release signing:** a self-generated release key lives in `%USERPROFILE%\.sovereign-mesh\` (outside the repo). It must be backed up; losing it means existing installs cannot be updated in place.

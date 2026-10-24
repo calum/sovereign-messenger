@@ -39,4 +39,22 @@ class CoreBridge {
 
     /** Whether the OS honoured `mlock` for the core's memory. Counts only, no content. */
     fun lockReport(): LockReport = messenger.lockReport()
+
+    /** Payload bytes for this phone's QR code. Built by rust-core; Kotlin only renders them. */
+    fun ownPairingPayload(): ByteArray = messenger.ownPairingPayload("")
+
+    fun ownFingerprint(): String = messenger.ownFingerprint()
+
+    /** Pins a scanned identity under [peer]. A changed key is refused and reported, never applied. */
+    fun scanPairing(peer: String, payload: ByteArray): PairingOutcome =
+        pairingOutcome(peer) { messenger.scanPairing(peer, payload) }
+
+    fun pinnedPeers(): List<String> = messenger.pinnedPeers()
+
+    fun pinFingerprint(peer: String): String? = messenger.pinFingerprint(peer)
+
+    /** The user checked the new key in person and accepts it. The next scan pins it. */
+    fun acceptNewKey(peer: String) {
+        messenger.unpin(peer)
+    }
 }

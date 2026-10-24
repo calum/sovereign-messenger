@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import org.sovereign.mesh.ui.ChatScreen
 import org.sovereign.mesh.ui.ChatListScreen
+import org.sovereign.mesh.ui.PairingScreen
 import org.sovereign.mesh.ui.TourScreen
 
 class MainActivity : ComponentActivity() {
@@ -28,14 +29,19 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var showTour by remember { mutableStateOf(true) }
                     var openPeer by remember { mutableStateOf<String?>(null) }
+                    var showPairing by remember { mutableStateOf(false) }
 
                     when {
                         showTour -> TourScreen(onFinished = { showTour = false })
+                        showPairing -> PairingScreen(onBack = { showPairing = false })
                         openPeer != null -> ChatScreen(
                             peer = openPeer!!,
                             onBack = { openPeer = null },
                         )
-                        else -> ChatListScreen(onOpenChat = { openPeer = it })
+                        else -> ChatListScreen(
+                            onOpenChat = { openPeer = it },
+                            onPair = { showPairing = true },
+                        )
                     }
                 }
             }
