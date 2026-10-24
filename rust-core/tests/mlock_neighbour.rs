@@ -31,7 +31,10 @@ fn page_of(s: &SecretBytes) -> usize {
 #[test]
 fn dropping_one_secret_keeps_a_live_neighbour_on_its_page_locked() {
     let first = SecretBytes::new(&[1u8; 16]);
-    assert!(first.is_locked(), "first secret must lock for the test to mean anything");
+    assert!(
+        first.is_locked(),
+        "first secret must lock for the test to mean anything"
+    );
 
     // Find a second secret on the same page as the first.
     let mut kept = Vec::new();
@@ -42,7 +45,10 @@ fn dropping_one_secret_keeps_a_live_neighbour_on_its_page_locked() {
             break candidate;
         }
         kept.push(candidate);
-        assert!(kept.len() < 10_000, "no shared page found; allocator behaviour changed");
+        assert!(
+            kept.len() < 10_000,
+            "no shared page found; allocator behaviour changed"
+        );
     };
 
     let before = vm_lck_bytes();
