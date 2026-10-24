@@ -35,7 +35,8 @@ impl Drop for SecretBytes {
 }
 
 /// Fixed-size secret key material, zeroized on drop.
-#[derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop, Clone)]
+/// No `Clone`: a copy of a key is a second place it can leak, and nothing in the core needs one.
+#[derive(zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
 pub struct Key32(pub [u8; 32]);
 
 #[cfg(unix)]
@@ -66,9 +67,77 @@ fn lock(_buf: &[u8]) -> bool {
 #[cfg(not(unix))]
 fn unlock(_buf: &[u8]) {}
 
+/// Test-only probes that report whether a type implements `Clone` or `Debug`.
+/// Inherent associated consts are selected only when their bound holds, so
+/// `Probe::<T>::CLONE` is `true` exactly when `T: Clone`, and the trait fallback
+/// gives `false` otherwise. A secret type that gains a derive fails its test.
+#[cfg(test)]
+pub(crate) mod probe {
+    use std::marker::PhantomData;
+
+    pub(crate) struct Probe<T>(PhantomData<T>);
+
+    pub(crate) trait NoClone {
+        const CLONE: bool = false;
+    }
+    impl<T> NoClone for Probe<T> {}
+    impl<T: Clone> Probe<T> {
+        pub(crate) const CLONE: bool = true;
+    }
+
+    pub(crate) trait NoDebug {
+        const DEBUG: bool = false;
+    }
+    impl<T> NoDebug for Probe<T> {}
+    impl<T: std::fmt::Debug> Probe<T> {
+        pub(crate) const DEBUG: bool = true;
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::probe::{NoClone, NoDebug, Probe};
     use super::*;
+
+    #[test]
+    fn probe_reports_true_for_a_type_that_has_both_traits() {
+        // Positive control: without it, a probe that always answers false would pass.
+        {
+            let value = Probe::<u8>::CLONE;
+            assert!(value);
+        }
+        {
+            let value = Probe::<u8>::DEBUG;
+            assert!(value);
+        }
+    }
+
+    #[test]
+    fn key_material_types_do_not_implement_clone() {
+        // CLAUDE.md rule 2: do not Clone secret types casually. Nothing in the
+        // core needs a copy of a key, so the type must not offer one.
+        {
+            let value = Probe::<Key32>::CLONE;
+            assert!(!value);
+        }
+        {
+            let value = Probe::<SecretBytes>::CLONE;
+            assert!(!value);
+        }
+    }
+
+    #[test]
+    fn key_material_types_do_not_implement_debug() {
+        // A derived Debug would print key bytes into any `{:?}` or panic message.
+        {
+            let value = Probe::<Key32>::DEBUG;
+            assert!(!value);
+        }
+        {
+            let value = Probe::<SecretBytes>::DEBUG;
+            assert!(!value);
+        }
+    }
 
     #[test]
     fn secret_bytes_round_trip() {

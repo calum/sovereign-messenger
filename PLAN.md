@@ -2,7 +2,7 @@
 
 This plan is updated as work is done. Checked items are verified in the repo; unchecked items are not started or not verified. Each change to the plan should say what changed and why.
 
-_Last updated: 2026-10-24 (section 5: transfer and verification)._
+_Last updated: 2026-10-24 (section 6: hardening review; `docs/hardening-review.md`)._
 
 ## Done
 
@@ -61,11 +61,12 @@ _Last updated: 2026-10-24 (section 5: transfer and verification)._
 - [x] Decide how the developer's signing key is pinned on first contact. Decided: compiled-in constant, fingerprint shown on the update screen. The constant is `None` in this build, so no update installs until the owner sets it (see Decisions, 2026-10-24).
 
 ### 6. Hardening and review
-- [ ] Review every `unsafe` block and the `mlock` calls
-- [ ] Find and remove any place where plaintext could reach a log or an exception message
-- [ ] Verify `FLAG_SECURE` on a real device (screenshot, screen recording, recents thumbnail)
-- [ ] Add tests for the Kotlin UI logic that is not just layout
-- [ ] Independent review of the cryptographic design before anyone relies on it
+Findings and evidence are in `docs/hardening-review.md`.
+- [x] Review every `unsafe` block and the `mlock` calls. Done: two `unsafe` blocks, both in `secret.rs`, reviewed. Open problem F2: `munlock` can unlock a page that another live secret shares. Not fixed; the owner must choose a fix (see Decisions, 2026-10-24).
+- [x] Find and remove any place where plaintext could reach a log or an exception message. Done: no logging in rust-core or Kotlin `main`, and no leak in panics, Debug output or exceptions. The one real problem, `Key32: Clone`, is fixed with a RED test. Two residual plaintext or key copies (L3, L4) are recorded and not fixed.
+- [ ] Verify `FLAG_SECURE` on a real device (screenshot, screen recording, recents thumbnail). NOT VERIFIED: no device here. The flag is still set in `MainActivity.kt`. Left unticked.
+- [x] Add tests for the Kotlin UI logic that is not just layout. Done: `UpdateStatusTest`, `RetentionCountdownTest`, and three new `TransportStatusTest` cases. Pairing outcome and the QR codec were already tested.
+- [ ] Independent review of the cryptographic design before anyone relies on it. NOT DONE: no independent party here. The points for the reviewer are in `docs/hardening-review.md`, section 5. Left unticked.
 
 ### 7. Usability
 - [ ] Verify the tour and chat flow on a phone
@@ -114,3 +115,8 @@ _Last updated: 2026-10-24 (section 5: transfer and verification)._
 - **2026-10-24, skipped-key cache size:** `MAX_SKIP` is 100 counters per receive and `MAX_CACHED_KEYS` is 100 keys per cache (`rust-core/src/ratchet.rs`). When the cache is full the oldest key is evicted and zeroized. Why: 100 covers a burst of lost messages on a LAN link, and the skip cap bounds the work a forged large counter can cause. A full cache holds 3.2 KB of key material. The numbers are a choice, not a standard value. Cost if wrong: a burst of more than 100 lost messages cannot be read later; a larger cap holds more keys in RAM.
 - **2026-10-24, ratchet frame v1 layout:** `[tag 0x02][version 0x01][ratchet X25519 public key, 32 bytes][pn, u64 big-endian][n, u64 big-endian][ciphertext]`. Before the ciphertext the frame is 50 bytes, and the ciphertext is at least the 16-byte tag. The version, key, pn and n are the AEAD associated data, so changing any of them fails authentication. The old 9-byte header (tag and counter) is gone. The Kotlin `WireMessage` record gained `ratchetPublic` and `previousCount`, so the app and core must be built from the same commit. Cost if wrong: a frame with another version byte is refused, not misread.
 - **2026-10-24, DH ratchet design (not independently reviewed):** the standard Double Ratchet construction, with one deviation. Both sides start from the handshake root with the same chain labels as before, because there is no prekey to start a DH step, so each side can send before it has a peer key. The first key seen from the peer is accepted without a DH step; a message that does not authenticate on the handshake chain is tried as a DH step, and state changes only after authentication. A side makes a new ratchet key on its next send after receiving a new peer key. Root KDF: HKDF-SHA256, salt = root key, input = the DH output, info `sovereign-p2p v1 dh ratchet`, 64 bytes split into a new root key and a chain key. Message keys use the chain KDF already in use. Limits: (a) if both sides take a DH step before either has seen the other's new key, the receiver refuses with `Auth` and the session must be re-handshaken; (b) a handshake-chain message delayed past the peer's first DH step is refused; (c) a skipped key is kept for the previous epoch until it is used or evicted. Why: the owner asked for the standard construction on existing crates. `Chain` (symmetric, no DH step) is no longer on the wire path. Cost if wrong: a flaw in the construction breaks recovery or confidentiality without a visible error, so it must be reviewed before anyone relies on it (section 6).
+- **2026-10-24, `Key32` is not `Clone`:** Ruling: `Key32` loses its `Clone` derive, because no code used it. Why: CLAUDE.md rule 2; each copy is a second place a key can leak. Test: `secret::tests::key_material_types_do_not_implement_clone`, which failed with the derive present. Cost if wrong: a future caller that needs a copy must pass a reference or make a deliberate, reviewed copy.
+- **2026-10-24, secret types must not implement `Debug` or `Clone`:** Ruling: a test-only probe (`secret::probe`) asserts that `Key32`, `SecretBytes`, `Identity`, `Chain`, `DoubleRatchet` and `Messenger` have neither trait. Why: a derive is the easiest way for a key to reach a panic or log. Cost if wrong: the probe checks trait absence only; a hand-written `Display` or a `format!` at a call site is not caught.
+- **2026-10-24, `munlock` is recorded as an open problem:** Ruling: finding F2 in `docs/hardening-review.md` is recorded, not fixed in this pass. Why: Linux locks per page and `munlock` is not reference counted, so one drop can unlock a live neighbour. Reproducing it needs Linux, which this host lacks, and both fixes change allocation or unlock behaviour. Options: (a) page-granular secret allocation, or (b) stop unlocking. Cost if wrong: a live stored message can lose its page lock, and `is_locked` then over-reports. The owner must choose before a device run.
+- **2026-10-24, the countdown is a tested function:** Ruling: the retention formatting moved to `formatRetention` in `ui/ChatScreen.kt`, with JVM tests. Why: formatting is pure logic, and only a plain function can be unit-tested without Compose. Cost if wrong: none found; the displayed text is unchanged.
+- **2026-10-24, the signed update format has no version or rollback field:** Ruling: left as it is and flagged for independent review. Why: the owner's design signs the APK bytes only, and a change needs a new wire format. Cost if wrong: a validly signed older APK verifies in the app; Android's installer is expected to refuse a downgrade for a non-debuggable app, which is not verified here.

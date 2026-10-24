@@ -305,6 +305,20 @@ fn kdf_root(root: &Key32, dh: &[u8]) -> (Key32, Key32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secret::probe::{NoClone, NoDebug, Probe};
+
+    #[test]
+    fn ratchet_state_has_no_debug_or_clone() {
+        // The root key, the ratchet secret and every skipped key sit behind this type.
+        {
+            let value = Probe::<DoubleRatchet>::DEBUG;
+            assert!(!value);
+        }
+        {
+            let value = Probe::<DoubleRatchet>::CLONE;
+            assert!(!value);
+        }
+    }
 
     const I2R: &[u8] = b"i->r";
     const R2I: &[u8] = b"r->i";

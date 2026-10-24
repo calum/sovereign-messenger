@@ -550,6 +550,21 @@ fn to_array32(bytes: &[u8]) -> Result<[u8; 32], FacadeError> {
 #[cfg(test)]
 mod update_facade_tests {
     use super::*;
+    use crate::secret::probe::{NoClone, NoDebug, Probe};
+
+    #[test]
+    fn messenger_has_no_debug_or_clone() {
+        // Dropping the Messenger wipes every key and message, and a Debug print
+        // would expose the state. Neither the object nor the Arc handed to Kotlin may print.
+        {
+            let value = Probe::<Messenger>::DEBUG;
+            assert!(!value);
+        }
+        {
+            let value = Probe::<Messenger>::CLONE;
+            assert!(!value);
+        }
+    }
 
     #[test]
     fn facade_refuses_every_update_while_no_key_is_compiled_in() {

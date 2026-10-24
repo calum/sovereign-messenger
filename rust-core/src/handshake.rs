@@ -165,6 +165,20 @@ fn derive_root(eph_dh: &[u8], ss: &[u8], static_dh: &[u8]) -> Key32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secret::probe::{NoClone, NoDebug, Probe};
+
+    #[test]
+    fn identity_secrets_have_no_debug_or_clone() {
+        // A derived Debug would print the X25519 secret and the ML-KEM seed.
+        {
+            let value = Probe::<Identity>::DEBUG;
+            assert!(!value);
+        }
+        {
+            let value = Probe::<Identity>::CLONE;
+            assert!(!value);
+        }
+    }
 
     #[test]
     fn both_sides_derive_same_root() {

@@ -34,6 +34,13 @@ import org.sovereign.mesh.core.transportStatusText
 /** Seconds of RAM-only retention shown in the header. Matches the wipe-on-stop policy. */
 private const val RETENTION_SECONDS = 15 * 60
 
+/**
+ * Formats the remaining retention as `m:ss`. The header shows it so the user can
+ * see when the RAM-only history will be wiped; the value is a count, never content.
+ */
+fun formatRetention(seconds: Int): String =
+    "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
+
 /** Port this phone listens on when it waits for a contact to dial in. */
 private const val LISTEN_PORT = 47001
 
@@ -84,7 +91,7 @@ fun ChatScreen(peer: String, onBack: () -> Unit) {
         ) {
             Button(onClick = onBack) { Text("Back") }
             Text(
-                "RAM only · ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}",
+                "RAM only · ${formatRetention(remaining)}",
                 style = MaterialTheme.typography.labelMedium,
             )
         }

@@ -258,6 +258,20 @@ fn nonce_for(counter: u64) -> Nonce {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secret::probe::{NoClone, NoDebug, Probe};
+
+    #[test]
+    fn chain_state_has_no_debug_or_clone() {
+        // The chain key and every cached message key sit behind this type.
+        {
+            let value = Probe::<Chain>::DEBUG;
+            assert!(!value);
+        }
+        {
+            let value = Probe::<Chain>::CLONE;
+            assert!(!value);
+        }
+    }
 
     #[test]
     fn round_trip_in_order() {
