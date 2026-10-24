@@ -43,7 +43,7 @@ Use `mise` tasks; they are the source of truth (see `mise.toml`).
 
 - `CoreBridge` calls `rust-core` through UniFFI, and the TCP transport works on loopback only. Nothing has been sent between two phones, and the native library has not been run on a device.
 - No Tor transport. Do not add a central relay or cloud service as a shortcut.
-- The ratchet has no DH step.
+- The ratchet's DH step is standard but not independently reviewed. The first-peer-key bootstrap (no DH step for the first message) is a deliberate deviation; see PLAN.md Decisions.
 - `mlock` can fail silently at the call site; `SecretBytes::is_locked` reports it.
 - `Chain` and `Identity` hold secrets on the stack during operations; intermediate copies are not all wiped.
 
