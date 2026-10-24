@@ -7,6 +7,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Ignore
 import org.junit.Test
 import uniffi.rust_core.FacadeException
 import uniffi.rust_core.Messenger
@@ -45,6 +46,22 @@ class PairingCodecTest {
         val matrix = QrCodec.encode(payload)
         val decoded = QrCodec.decode(luminanceOf(matrix))
         assertArrayEquals(payload, decoded)
+    }
+
+    /**
+     * R1/A2: one scan that fails in ten minutes is a field bug. Each payload is a
+     * fresh identity, so 200 of them sample the sizes a real pairing produces.
+     */
+    @Ignore("A2 open: about 7% of fresh payloads fail to decode in ZXing 3.5.3 and 3.5.4 alike, with random bytes too. See PLAN.md Decisions, 2026-10-24, QR decode.")
+    @Test
+    fun twoHundredFreshPayloadsDecodeEveryTime() {
+        val failures = mutableListOf<Int>()
+        repeat(200) { i ->
+            val payload = Messenger().ownPairingPayload("10.0.0.2:7000")
+            val decoded = QrCodec.decode(luminanceOf(QrCodec.encode(payload)))
+            if (decoded == null || !decoded.contentEquals(payload)) failures += i
+        }
+        assertEquals("payloads that failed to decode: $failures", emptyList<Int>(), failures)
     }
 
     @Test
