@@ -96,4 +96,13 @@ class CoreBridge(private val messenger: Messenger = Messenger()) {
      */
     fun receiveUpdate(bindAddr: String, timeoutSecs: Int, installedVersion: Long): ByteArray =
         messenger.receiveUpdate(bindAddr, timeoutSecs.toUInt(), installedVersion.toULong()).apk
+
+    /**
+     * Forwards one developer-signed bundle to the phone at [addr]: the APK, its
+     * 64-byte signature and the version. This phone does not sign. Blocking; the
+     * caller runs it off the UI thread. Throws [FacadeException] on refusal or
+     * network failure. The receiver verifies the bundle before it offers install.
+     */
+    fun sendUpdate(addr: String, timeoutSecs: Int, apk: ByteArray, version: Long, signature: ByteArray) =
+        messenger.sendUpdate(addr, timeoutSecs.toUInt(), apk, version.toULong(), signature)
 }
