@@ -1,0 +1,24 @@
+# Gradle / Android
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Rust
+rust-core/target/
+**/*.rs.bk
+
+# Crash logs and OS junk
+hs_err_pid*.log
+.DS_Store
+Thumbs.db
+
+# Release signing (never commit)
+keystore.properties

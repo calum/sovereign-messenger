@@ -1,0 +1,41 @@
+PROJECT: Sovereign Mesh (sovereign-messenger)
+STATUS: experimental, not audited, not for sensitive use yet.
+PURPOSE: P2P messenger for a closed group (up to 5 people) on Android. No servers, no cloud, no disk storage of messages. Post-quantum key exchange.
+
+COMPONENTS
+- rust-core/  Rust library (crate: rust-core)
+  - secret.rs     SecretBytes (mlock + zeroize), Key32 (zeroize on drop)
+  - handshake.rs  X25519 + ML-KEM-768 hybrid key agreement (HKDF-SHA256 root key)
+  - ratchet.rs    symmetric chain, ChaCha20-Poly1305, in-order only, replay rejected
+  - update.rs     Ed25519 verification of update payloads against a pinned key
+  - store.rs      RAM-only chat store, no persistence API
+  - error.rs      CoreError (no secret content in messages)
+- app/           Android app, Kotlin + Jetpack Compose, minSdk 29, targetSdk 35, package org.sovereign.mesh
+  - MainActivity: FLAG_SECURE, wipes core on stop
+  - core/CoreBridge: STUB, not yet wired to rust-core
+  - ui/: TourScreen, ChatListScreen, ChatScreen
+
+WORKS TODAY
+- 10 Rust unit tests pass (mise run rust:test)
+- clippy -D warnings and fmt clean (mise run rust:lint)
+- debug APK builds (mise run android:debug)
+
+NOT DONE
+- network transport (Tor v3 onion services): not started
+- UniFFI bindings and Android cross-compile of rust-core: not started
+- QR onboarding, APK transfer between phones, signed-update delivery: not started
+- ratchet DH step (post-compromise security): not started
+- app does not send or receive messages yet
+
+CONSTRAINTS FOR CHANGES
+- never write message/key data to disk
+- zeroize every type that holds secrets
+- no plaintext in logs or errors
+- keep allowBackup=false and FLAG_SECURE
+- use existing RustCrypto crates; do not invent primitives
+
+COMMANDS
+- mise run rust:test | rust:lint | check | android:debug | android:release | android:install
+- Windows: JAVA_HOME must point at JDK 17; system JDK 11 is too old
+
+SEE ALSO: README.md (status and setup), PLAN.md (checklist, kept current), CLAUDE.md (rules for AI assistants)

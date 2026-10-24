@@ -1,0 +1,57 @@
+# Run `mise tasks` to list everything. Run `mise run <task>` to execute one.
+# Requires: rustup (cargo), JDK 17+, Android SDK (see README "Setup").
+
+[tools]
+rust = "stable"
+
+[env]
+RUST_BACKTRACE = "1"
+
+[tasks."rust:test"]
+description = "Run rust-core unit tests"
+run = "cargo test --manifest-path rust-core/Cargo.toml"
+
+[tasks."rust:lint"]
+description = "Format check and clippy with warnings as errors"
+run = [
+  "cargo fmt --manifest-path rust-core/Cargo.toml -- --check",
+  "cargo clippy --manifest-path rust-core/Cargo.toml --all-targets -- -D warnings",
+]
+
+[tasks."rust:clean"]
+description = "Remove rust-core build output"
+run = "cargo clean --manifest-path rust-core/Cargo.toml"
+
+[tasks."android:debug"]
+description = "Build the debug APK"
+run = "./gradlew :app:assembleDebug"
+run_windows = ".\\gradlew.bat :app:assembleDebug"
+
+[tasks."android:release"]
+description = "Build the release APK (unsigned unless a signing config is added)"
+run = "./gradlew :app:assembleRelease"
+run_windows = ".\\gradlew.bat :app:assembleRelease"
+
+[tasks."android:test"]
+description = "Run Android JVM unit tests"
+run = "./gradlew :app:testDebugUnitTest"
+run_windows = ".\\gradlew.bat :app:testDebugUnitTest"
+
+[tasks."android:install"]
+description = "Install the debug APK on a connected device over adb"
+depends = ["android:debug"]
+run = "adb install -r app/build/outputs/apk/debug/app-debug.apk"
+
+[tasks.test]
+description = "Run every test suite"
+depends = ["rust:test", "android:test"]
+
+[tasks.check]
+description = "Lint everything, then run all tests"
+depends = ["rust:lint", "test"]
+
+[tasks.clean]
+description = "Remove all build output"
+depends = ["rust:clean"]
+run = "./gradlew clean"
+run_windows = ".\\gradlew.bat clean"
