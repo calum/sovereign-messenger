@@ -40,6 +40,26 @@ impl Store {
     pub fn wipe_all(&mut self) {
         self.messages.clear();
     }
+
+    /// Counts how many stored messages are `mlock`ed. Reports counts only, never
+    /// content, so the UI can show whether the OS honoured the lock.
+    pub fn lock_count(&self) -> LockCount {
+        let mut count = LockCount::default();
+        for msg in self.messages.values().flatten() {
+            count.total += 1;
+            if msg.is_locked() {
+                count.locked += 1;
+            }
+        }
+        count
+    }
+}
+
+/// Result of [`Store::lock_count`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LockCount {
+    pub total: usize,
+    pub locked: usize,
 }
 
 #[cfg(test)]
@@ -53,5 +73,15 @@ mod tests {
         assert_eq!(s.history("alice"), vec![&b"hello"[..]]);
         s.forget("alice");
         assert!(s.history("alice").is_empty());
+    }
+
+    #[test]
+    fn lock_report_counts_every_stored_message() {
+        let mut s = Store::new();
+        s.push("alice", b"one");
+        s.push("bob", b"two");
+        let r = s.lock_count();
+        assert_eq!(r.total, 2);
+        assert!(r.locked <= r.total);
     }
 }

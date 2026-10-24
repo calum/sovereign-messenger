@@ -20,6 +20,16 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 thiserror = "1"
 getrandom = "0.3"
+uniffi = "0.32"
+
+[features]
+# Enables the uniffi-bindgen binary that generates the Kotlin bindings.
+bindgen = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
 
 [profile.release]
 panic = "abort"

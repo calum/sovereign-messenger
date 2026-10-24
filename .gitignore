@@ -22,3 +22,6 @@ Thumbs.db
 
 # Release signing (never commit)
 keystore.properties
+
+# Cross-compiled native libraries (build output from rust-core/scripts/build-android.sh)
+app/src/main/jniLibs/

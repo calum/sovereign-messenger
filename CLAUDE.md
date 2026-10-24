@@ -41,8 +41,7 @@ Use `mise` tasks; they are the source of truth (see `mise.toml`).
 
 ## Known gaps (do not paper over)
 
-- `CoreBridge` is a stub. The app does not yet call `rust-core`.
-- No UniFFI bindings yet.
+- `CoreBridge` calls `rust-core` through UniFFI, but nothing is transmitted yet and the native library has not been run on a device.
 - No Tor transport. Do not add a central relay or cloud service as a shortcut.
 - The ratchet has no DH step.
 - `mlock` can fail silently at the call site; `SecretBytes::is_locked` reports it.

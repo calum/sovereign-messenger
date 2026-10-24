@@ -10,19 +10,22 @@ COMPONENTS
   - update.rs     Ed25519 verification of update payloads against a pinned key
   - store.rs      RAM-only chat store, no persistence API
   - error.rs      CoreError (no secret content in messages)
+  - ffi.rs        UniFFI facade: Messenger object, the only surface Kotlin calls
+  - scripts/      build-android.sh (NDK cross-compile), gen-kotlin.sh (bindings)
 - app/           Android app, Kotlin + Jetpack Compose, minSdk 29, targetSdk 35, package org.sovereign.mesh
   - MainActivity: FLAG_SECURE, wipes core on stop
-  - core/CoreBridge: STUB, not yet wired to rust-core
+  - core/CoreBridge: forwards to generated UniFFI bindings (uniffi/rust_core); no transport yet
   - ui/: TourScreen, ChatListScreen, ChatScreen
 
 WORKS TODAY
-- 10 Rust unit tests pass (mise run rust:test)
+- 18 Rust tests pass (mise run rust:test)
 - clippy -D warnings and fmt clean (mise run rust:lint)
-- debug APK builds (mise run android:debug)
+- debug APK builds with libuniffi_rust_core.so for arm64-v8a and x86_64
+- 5 JVM tests pass through JNA (mise run android:test)
 
 NOT DONE
 - network transport (Tor v3 onion services): not started
-- UniFFI bindings and Android cross-compile of rust-core: not started
+- running the native library on a device or emulator: not done
 - QR onboarding, APK transfer between phones, signed-update delivery: not started
 - ratchet DH step (post-compromise security): not started
 - app does not send or receive messages yet

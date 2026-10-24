@@ -14,13 +14,14 @@ Right now this is a working core library, a passing test suite, and an Android a
   - a symmetric ratchet (ChaCha20-Poly1305) that rejects tampered and replayed messages,
   - Ed25519 verification of update payloads against a pinned developer key,
   - a RAM-only chat store with no persistence API.
-  10 unit tests pass.
-- **`app/`**: an Android (Kotlin, Jetpack Compose) shell with a three-card tour, a chat list, a chat screen with a RAM-retention countdown, `FLAG_SECURE` on every window, and backups disabled in the manifest. The chat data layer is a stub.
+  - a UniFFI facade (`ffi.rs`) that exposes a `Messenger` object; keys and plaintext stay in Rust.
+  11 unit tests and 7 integration tests pass.
+- **`app/`**: an Android (Kotlin, Jetpack Compose) shell with a three-card tour, a chat list, a chat screen with a RAM-retention countdown, `FLAG_SECURE` on every window, and backups disabled in the manifest. `CoreBridge` calls the generated UniFFI bindings for `rust-core` (arm64-v8a and x86_64 libraries are built by `rust-core/scripts/build-android.sh`). Five JVM tests run the real core through JNA.
 
 ## What does not work yet
 
-- No network transport. Tor onion services are not implemented.
-- The Rust core is not yet compiled for Android or called from the app (UniFFI is not wired up).
+- No network transport. Tor onion services are not implemented. Messages are recorded locally but are not sent to another phone.
+- The app has no QR onboarding yet, so no session can be created from the UI; the native library has not been run on a device or emulator.
 - No QR onboarding, no APK transfer between phones, no signed-update delivery.
 - The ratchet has no Diffie-Hellman step, so it has no post-compromise recovery.
 - Nothing here has been independently reviewed. The cryptography uses third-party crates (`ml-kem`, `x25519-dalek`, `ed25519-dalek`, `chacha20poly1305`, `hkdf`) that have not been audited as part of this project.
