@@ -46,8 +46,8 @@ fn tampered_ciphertext_rejected_and_state_unchanged() {
     let (alice, bob) = paired();
     let genuine = alice.send("bob".into(), "attack at dawn".into()).unwrap();
     let mut forged = WireMessage {
-        counter: genuine.counter,
         ciphertext: genuine.ciphertext.clone(),
+        ..genuine.clone()
     };
     forged.ciphertext[0] ^= 1;
 
@@ -70,8 +70,8 @@ fn replayed_message_rejected() {
     let (alice, bob) = paired();
     let m = alice.send("bob".into(), "once".into()).unwrap();
     let replay = WireMessage {
-        counter: m.counter,
         ciphertext: m.ciphertext.clone(),
+        ..m.clone()
     };
     bob.receive("alice".into(), m).unwrap();
     assert_eq!(

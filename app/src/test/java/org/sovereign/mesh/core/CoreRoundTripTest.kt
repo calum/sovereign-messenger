@@ -39,7 +39,7 @@ class CoreRoundTripTest {
         val sent = alice.send("bob", "attack at dawn")
         val flipped = sent.ciphertext.copyOf()
         flipped[0] = (flipped[0].toInt() xor 1).toByte()
-        val forged = WireMessage(sent.counter, flipped)
+        val forged = sent.copy(ciphertext = flipped)
         assertThrows(FacadeException.AuthFailed::class.java) {
             bob.receive("alice", forged)
         }

@@ -2196,9 +2196,23 @@ public object FfiConverterTypeScannedPeer: FfiConverterRustBuffer<ScannedPeer> {
 
 
 /**
- * One sealed chat message as it goes over the wire.
+ * One sealed chat message as it goes over the wire. The first three fields are the
+ * ratchet header; they are authenticated with the ciphertext.
  */
 data class WireMessage (
+    /**
+     * The sender's current ratchet public key (32 bytes).
+     */
+    var `ratchetPublic`: kotlin.ByteArray
+    , 
+    /**
+     * Length of the sender's previous sending chain.
+     */
+    var `previousCount`: kotlin.ULong
+    , 
+    /**
+     * Position of this message in the sending chain.
+     */
     var `counter`: kotlin.ULong
     , 
     var `ciphertext`: kotlin.ByteArray
@@ -2218,17 +2232,23 @@ data class WireMessage (
 public object FfiConverterTypeWireMessage: FfiConverterRustBuffer<WireMessage> {
     override fun read(buf: ByteBuffer): WireMessage {
         return WireMessage(
+            FfiConverterByteArray.read(buf),
+            FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterByteArray.read(buf),
         )
     }
 
     override fun allocationSize(value: WireMessage) = (
+            FfiConverterByteArray.allocationSize(value.`ratchetPublic`) +
+            FfiConverterULong.allocationSize(value.`previousCount`) +
             FfiConverterULong.allocationSize(value.`counter`) +
             FfiConverterByteArray.allocationSize(value.`ciphertext`)
     )
 
     override fun write(value: WireMessage, buf: ByteBuffer) {
+            FfiConverterByteArray.write(value.`ratchetPublic`, buf)
+            FfiConverterULong.write(value.`previousCount`, buf)
             FfiConverterULong.write(value.`counter`, buf)
             FfiConverterByteArray.write(value.`ciphertext`, buf)
     }

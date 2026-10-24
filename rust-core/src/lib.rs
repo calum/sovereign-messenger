@@ -1,6 +1,7 @@
 //! Sovereign messenger core. Everything here lives in RAM only.
 //! There is no database, no cache file and no write path to flash storage.
 
+pub mod double_ratchet;
 pub mod error;
 pub mod ffi;
 pub mod handshake;

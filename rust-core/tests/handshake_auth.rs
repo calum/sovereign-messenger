@@ -3,10 +3,10 @@
 //! static keys feed the root through a static-static DH, so a wrong static key
 //! on either side gives a different root and the first message does not open.
 
+use rust_core::double_ratchet::DoubleRatchet;
 use rust_core::ffi::{FacadeError, Messenger};
 use rust_core::handshake::{self, Identity};
-use rust_core::ratchet::Chain;
-use rust_core::wire::{self, INITIATOR_TO_RESPONDER};
+use rust_core::wire::{self, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
 use rust_core::CoreError;
 
 // Offsets in the handshake frame: tag, ephemeral key, initiator static key, ML-KEM ciphertext.
@@ -23,8 +23,8 @@ fn pinned_initiator_and_responder_derive_the_same_root_and_exchange_a_message() 
     let root_b = handshake::respond(&bob, &alice_pub.x25519, &init).unwrap();
     assert_eq!(root_a.0, root_b.0);
 
-    let mut send = Chain::new(&root_a, INITIATOR_TO_RESPONDER);
-    let mut recv = Chain::new(&root_b, INITIATOR_TO_RESPONDER);
+    let mut send = DoubleRatchet::new(&root_a, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
+    let mut recv = DoubleRatchet::new(&root_b, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
     let msg = send.seal(b"hello bob").unwrap();
     assert_eq!(recv.open(&msg).unwrap(), b"hello bob".to_vec());
 }
@@ -52,8 +52,8 @@ fn responder_with_a_wrong_static_key_cannot_complete_with_the_real_initiator() {
     let root_b = handshake::respond(&impostor_bob, &alice_pub.x25519, &init).unwrap();
     assert_ne!(root_a.0, root_b.0);
 
-    let mut send = Chain::new(&root_a, INITIATOR_TO_RESPONDER);
-    let mut recv = Chain::new(&root_b, INITIATOR_TO_RESPONDER);
+    let mut send = DoubleRatchet::new(&root_a, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
+    let mut recv = DoubleRatchet::new(&root_b, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
     let msg = send.seal(b"for bob only").unwrap();
     assert_eq!(recv.open(&msg), Err(CoreError::Auth));
 }
@@ -86,8 +86,8 @@ fn tampered_ephemeral_key_gives_a_root_that_does_not_open_the_first_message() {
     let root_b = handshake::respond(&bob, &alice_pub.x25519, &tampered).unwrap();
     assert_ne!(root_a.0, root_b.0);
 
-    let mut send = Chain::new(&root_a, INITIATOR_TO_RESPONDER);
-    let mut recv = Chain::new(&root_b, INITIATOR_TO_RESPONDER);
+    let mut send = DoubleRatchet::new(&root_a, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
+    let mut recv = DoubleRatchet::new(&root_b, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
     let msg = send.seal(b"hello").unwrap();
     assert_eq!(recv.open(&msg), Err(CoreError::Auth));
 }
@@ -104,8 +104,8 @@ fn tampered_kem_ciphertext_gives_a_root_that_does_not_open_the_first_message() {
     let root_b = handshake::respond(&bob, &alice_pub.x25519, &tampered).unwrap();
     assert_ne!(root_a.0, root_b.0);
 
-    let mut send = Chain::new(&root_a, INITIATOR_TO_RESPONDER);
-    let mut recv = Chain::new(&root_b, INITIATOR_TO_RESPONDER);
+    let mut send = DoubleRatchet::new(&root_a, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
+    let mut recv = DoubleRatchet::new(&root_b, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
     let msg = send.seal(b"hello").unwrap();
     assert_eq!(recv.open(&msg), Err(CoreError::Auth));
 }

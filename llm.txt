@@ -6,7 +6,8 @@ COMPONENTS
 - rust-core/  Rust library (crate: rust-core)
   - secret.rs     SecretBytes (mlock + zeroize), Key32 (zeroize on drop)
   - handshake.rs  X25519 + ML-KEM-768 hybrid key agreement plus static-static DH (HKDF-SHA256 root key); responder checks the initiator against its pin
-  - ratchet.rs    symmetric chain, ChaCha20-Poly1305, in-order only, replay rejected
+  - ratchet.rs    symmetric chain, ChaCha20-Poly1305, bounded skipped-key cache (out-of-order), replay rejected
+  - double_ratchet.rs  DH ratchet over the chains: X25519 key in each header, HKDF-SHA256 root, versioned header
   - update.rs     Ed25519 verification of update payloads against a pinned key
   - store.rs      RAM-only chat store, no persistence API
   - error.rs      CoreError (no secret content in messages)
@@ -31,7 +32,7 @@ NOT DONE
 - running the native library or the chat screen on a device or emulator: not done
 - handshake authentication of the initiator: done via static-static DH and the responder's pin (PLAN.md Decisions, 2026-10-24); not independently reviewed; no key-confirmation message; both phones must scan each other's QR first
 - QR onboarding camera scan on a device, APK transfer between phones, signed-update delivery: not verified or not started
-- ratchet DH step (post-compromise security): not started
+- ratchet DH step (post-compromise security): implemented in double_ratchet.rs; standard construction, tested in Rust, not independently reviewed; limits in PLAN.md Decisions (2026-10-24)
 
 CONSTRAINTS FOR CHANGES
 - never write message/key data to disk

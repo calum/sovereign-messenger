@@ -14,10 +14,10 @@ use std::time::Duration;
 
 use zeroize::Zeroize;
 
+use crate::double_ratchet::{DoubleRatchet, Header, Message};
 use crate::error::CoreError;
 use crate::handshake::{self, Identity, IdentityPublic};
 use crate::pairing;
-use crate::ratchet::{Chain, Message};
 use crate::secret::{Key32, SecretBytes};
 use crate::store::Store;
 use crate::transport::{TcpTransport, Transport};
@@ -48,9 +48,15 @@ pub struct ScannedPeer {
     pub connection_hint: String,
 }
 
-/// One sealed chat message as it goes over the wire.
+/// One sealed chat message as it goes over the wire. The first three fields are the
+/// ratchet header; they are authenticated with the ciphertext.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct WireMessage {
+    /// The sender's current ratchet public key (32 bytes).
+    pub ratchet_public: Vec<u8>,
+    /// Length of the sender's previous sending chain.
+    pub previous_count: u64,
+    /// Position of this message in the sending chain.
     pub counter: u64,
     pub ciphertext: Vec<u8>,
 }
@@ -109,8 +115,9 @@ impl From<CoreError> for FacadeError {
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct Session {
-    send: Mutex<Chain>,
-    recv: Mutex<Chain>,
+    /// Both directions and the DH ratchet state. Held only for the state change,
+    /// never across a socket read.
+    ratchet: Mutex<DoubleRatchet>,
     /// `None` for an in-process session with no network connection.
     link: Option<Arc<dyn Transport>>,
 }
@@ -274,20 +281,22 @@ impl Messenger {
     /// `send_over_transport` is the path that transmits.
     pub fn send(&self, peer_id: String, text: String) -> Result<WireMessage, FacadeError> {
         let session = self.session(&peer_id)?;
-        let sealed = lock_chain(&session.send)?.seal(text.as_bytes())?;
+        let sealed = lock_ratchet(&session.ratchet)?.seal(text.as_bytes())?;
         self.lock()?.store.push(&peer_id, text.as_bytes());
-        Ok(WireMessage {
-            counter: sealed.counter,
-            ciphertext: sealed.ciphertext,
-        })
+        Ok(wire_from_message(sealed))
     }
 
     /// Opens a message from the peer without a network receive. A tampered,
     /// replayed or out-of-order message is rejected and leaves the chain where it was.
     pub fn receive(&self, peer_id: String, msg: WireMessage) -> Result<(), FacadeError> {
         let session = self.session(&peer_id)?;
-        let mut plaintext = lock_chain(&session.recv)?.open(&Message {
-            counter: msg.counter,
+        let header = Header {
+            dh: to_array32(&msg.ratchet_public)?,
+            pn: msg.previous_count,
+            n: msg.counter,
+        };
+        let mut plaintext = lock_ratchet(&session.ratchet)?.open(&Message {
+            header,
             ciphertext: msg.ciphertext,
         })?;
         self.lock()?.store.push(&peer_id, &plaintext);
@@ -356,8 +365,8 @@ impl Messenger {
         let session = self.session(&peer_id)?;
         let link = session.link.clone().ok_or(FacadeError::NoLink)?;
         {
-            let mut chain = lock_chain(&session.send)?;
-            wire::send_message(link.as_ref(), &mut chain, text.as_bytes())?;
+            let mut ratchet = lock_ratchet(&session.ratchet)?;
+            wire::send_message(link.as_ref(), &mut ratchet, text.as_bytes())?;
         }
         self.lock()?.store.push(&peer_id, text.as_bytes());
         Ok(())
@@ -369,18 +378,17 @@ impl Messenger {
     pub fn receive_from_peer(&self, peer_id: String) -> Result<bool, FacadeError> {
         let session = self.session(&peer_id)?;
         let link = session.link.clone().ok_or(FacadeError::NoLink)?;
-        let polled = {
-            let mut chain = lock_chain(&session.recv)?;
-            wire::poll_message(link.as_ref(), &mut chain)?
+        // The socket wait happens without the ratchet lock, so a send is not stalled.
+        let Some(frame) = wire::receive_frame(link.as_ref())? else {
+            return Ok(false);
         };
-        match polled {
-            None => Ok(false),
-            Some(mut plaintext) => {
-                self.lock()?.store.push(&peer_id, &plaintext);
-                plaintext.zeroize();
-                Ok(true)
-            }
-        }
+        let mut plaintext = {
+            let mut ratchet = lock_ratchet(&session.ratchet)?;
+            wire::open_frame(&mut ratchet, &frame)?
+        };
+        self.lock()?.store.push(&peer_id, &plaintext);
+        plaintext.zeroize();
+        Ok(true)
     }
 
     /// Plaintext history for display, oldest first. Each string is a copy that
@@ -463,8 +471,19 @@ fn pin_or_check(st: &mut State, peer_id: &str, peer: &IdentityPublic) -> Result<
     }
 }
 
-fn lock_chain(chain: &Mutex<Chain>) -> Result<MutexGuard<'_, Chain>, FacadeError> {
-    chain.lock().map_err(|_| FacadeError::Internal)
+fn lock_ratchet(
+    ratchet: &Mutex<DoubleRatchet>,
+) -> Result<MutexGuard<'_, DoubleRatchet>, FacadeError> {
+    ratchet.lock().map_err(|_| FacadeError::Internal)
+}
+
+fn wire_from_message(msg: Message) -> WireMessage {
+    WireMessage {
+        ratchet_public: msg.header.dh.to_vec(),
+        previous_count: msg.header.pn,
+        counter: msg.header.n,
+        ciphertext: msg.ciphertext,
+    }
 }
 
 fn session_for(
@@ -474,8 +493,7 @@ fn session_for(
     link: Option<Arc<dyn Transport>>,
 ) -> Session {
     Session {
-        send: Mutex::new(Chain::new(root, send_label)),
-        recv: Mutex::new(Chain::new(root, recv_label)),
+        ratchet: Mutex::new(DoubleRatchet::new(root, send_label, recv_label)),
         link,
     }
 }
