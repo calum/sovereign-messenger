@@ -17,6 +17,8 @@ class CoreRoundTripTest {
     private fun paired(): Pair<Messenger, Messenger> {
         val alice = Messenger()
         val bob = Messenger()
+        // Bob must pin Alice's key from her QR code before he accepts her handshake.
+        bob.scanPairing("alice", alice.ownPairingPayload(""))
         val init = alice.startSession("bob", bob.ownIdentity())
         bob.acceptSession("alice", init)
         return alice to bob

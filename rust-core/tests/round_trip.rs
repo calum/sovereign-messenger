@@ -7,9 +7,15 @@ use std::sync::Arc;
 use rust_core::ffi::{FacadeError, Messenger, WireMessage};
 
 /// Alice initiates a session with Bob; Bob accepts it from the handshake message.
+/// Bob has scanned Alice's code, so he has pinned the key his handshake must match.
 fn paired() -> (Arc<Messenger>, Arc<Messenger>) {
     let alice = Messenger::new();
     let bob = Messenger::new();
+    bob.scan_pairing(
+        "alice".into(),
+        alice.own_pairing_payload(String::new()).unwrap(),
+    )
+    .unwrap();
     let bob_id = bob.own_identity().unwrap();
     let init = alice.start_session("bob".into(), bob_id).unwrap();
     bob.accept_session("alice".into(), init).unwrap();
@@ -79,7 +85,13 @@ fn wrong_identity_cannot_read_session() {
     let alice = Messenger::new();
     let bob = Messenger::new();
     let eve = Messenger::new();
-    // Alice meant Bob's key, but Eve answers the handshake.
+    // Alice meant Bob's key, but Eve answers the handshake. Eve has pinned Alice,
+    // so the handshake passes the pin check and only the derived root differs.
+    eve.scan_pairing(
+        "alice".into(),
+        alice.own_pairing_payload(String::new()).unwrap(),
+    )
+    .unwrap();
     let init = alice
         .start_session("bob".into(), bob.own_identity().unwrap())
         .unwrap();

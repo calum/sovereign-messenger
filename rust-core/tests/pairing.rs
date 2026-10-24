@@ -27,7 +27,9 @@ fn scanned_payload_pins_identity_and_shows_fingerprint() {
 fn handshake_works_after_scan() {
     let alice = Messenger::new();
     let bob = Messenger::new();
+    // Both phones scan: the responder must pin the initiator to accept its handshake.
     alice.scan_pairing("bob".into(), scan_of(&bob)).unwrap();
+    bob.scan_pairing("alice".into(), scan_of(&alice)).unwrap();
 
     let init = alice
         .start_session("bob".into(), bob.own_identity().unwrap())

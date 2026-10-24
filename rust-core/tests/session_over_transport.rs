@@ -26,10 +26,11 @@ fn pair() -> (TcpTransport, TcpTransport) {
 fn handshake_then_ratchet_both_directions_over_tcp() {
     let (client, server) = pair();
     let (me, public) = Identity::generate();
+    let (alice, alice_pub) = Identity::generate();
 
     let responder = std::thread::spawn(move || {
         let init = wire::receive_handshake(&server).unwrap();
-        let root = handshake::respond(&me, &init).unwrap();
+        let root = handshake::respond(&me, &alice_pub.x25519, &init).unwrap();
         let mut recv = Chain::new(&root, INITIATOR_TO_RESPONDER);
         let mut send = Chain::new(&root, RESPONDER_TO_INITIATOR);
         let heard = wire::receive_message(&server, &mut recv).unwrap();
@@ -38,7 +39,7 @@ fn handshake_then_ratchet_both_directions_over_tcp() {
         server
     });
 
-    let (init, root) = handshake::initiate(&public).unwrap();
+    let (init, root) = handshake::initiate(&alice, &public).unwrap();
     wire::send_handshake(&client, &init).unwrap();
     let mut send = Chain::new(&root, INITIATOR_TO_RESPONDER);
     let mut recv = Chain::new(&root, RESPONDER_TO_INITIATOR);

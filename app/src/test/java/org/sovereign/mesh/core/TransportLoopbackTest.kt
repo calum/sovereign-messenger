@@ -38,6 +38,8 @@ class TransportLoopbackTest {
         val alice = CoreBridge(Messenger())
         val bob = CoreBridge(Messenger())
         assertTrue(alice.scanPairing("bob", bob.ownPairingPayload()) is PairingOutcome.Pinned)
+        // The listener must pin the dialer too; an unpinned initiator is refused.
+        assertTrue(bob.scanPairing("alice", alice.ownPairingPayload()) is PairingOutcome.Pinned)
 
         val addr = "127.0.0.1:${freePort()}"
         var listenError: Throwable? = null

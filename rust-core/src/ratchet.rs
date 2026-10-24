@@ -41,6 +41,28 @@ impl Chain {
     }
 
     pub fn seal(&mut self, plaintext: &[u8]) -> Result<Message, CoreError> {
+        let (msg, next) = self.prepare(plaintext)?;
+        self.commit(next);
+        Ok(msg)
+    }
+
+    /// Seals `plaintext` and hands the message to `emit`. The counter and chain
+    /// key advance only if `emit` returns `Ok`. Otherwise the chain is left as it
+    /// was, so the peer never sees a gap: the next successful call reuses the
+    /// counter that the failed one would have used.
+    pub fn seal_with<F>(&mut self, plaintext: &[u8], emit: F) -> Result<(), CoreError>
+    where
+        F: FnOnce(&Message) -> Result<(), CoreError>,
+    {
+        let (msg, next) = self.prepare(plaintext)?;
+        emit(&msg)?;
+        self.commit(next);
+        Ok(())
+    }
+
+    /// Builds the next message and the chain key that follows it, without
+    /// changing `self`. The caller decides when to commit.
+    fn prepare(&self, plaintext: &[u8]) -> Result<(Message, Key32), CoreError> {
         let counter = self.counter;
         let (mut mk, next) = self.step();
         let cipher = ChaCha20Poly1305::new_from_slice(&mk.0).map_err(|_| CoreError::Malformed)?;
@@ -54,12 +76,18 @@ impl Chain {
                 },
             )
             .map_err(|_| CoreError::Auth)?;
+        Ok((
+            Message {
+                counter,
+                ciphertext,
+            },
+            next,
+        ))
+    }
+
+    fn commit(&mut self, next: Key32) {
         self.chain_key = next;
         self.counter += 1;
-        Ok(Message {
-            counter,
-            ciphertext,
-        })
     }
 
     /// Messages must arrive in order. Out-of-order support comes later.

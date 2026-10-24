@@ -5,7 +5,7 @@ PURPOSE: P2P messenger for a closed group (up to 5 people) on Android. No server
 COMPONENTS
 - rust-core/  Rust library (crate: rust-core)
   - secret.rs     SecretBytes (mlock + zeroize), Key32 (zeroize on drop)
-  - handshake.rs  X25519 + ML-KEM-768 hybrid key agreement (HKDF-SHA256 root key)
+  - handshake.rs  X25519 + ML-KEM-768 hybrid key agreement plus static-static DH (HKDF-SHA256 root key); responder checks the initiator against its pin
   - ratchet.rs    symmetric chain, ChaCha20-Poly1305, in-order only, replay rejected
   - update.rs     Ed25519 verification of update payloads against a pinned key
   - store.rs      RAM-only chat store, no persistence API
@@ -20,7 +20,7 @@ COMPONENTS
   - ui/: TourScreen, ChatListScreen, ChatScreen (connect or wait for contact, send, receive loop)
 
 WORKS TODAY
-- 61 Rust tests pass (mise run rust:test): 26 unit, 12 pairing, 7 round trip, 8 transport, 3 session over TCP, 5 facade over TCP
+- 75 Rust tests pass (mise run rust:test): 28 unit, 12 pairing, 7 round trip, 8 transport, 3 session over TCP, 6 facade over TCP, 9 handshake auth, 2 send counter
 - clippy -D warnings and fmt clean (mise run rust:lint)
 - debug APK builds with libuniffi_rust_core.so for arm64-v8a and x86_64
 - 20 JVM tests pass through JNA (mise run android:test), including a loopback message over TCP. The QR round trip test has failed intermittently; see PLAN.md
@@ -29,7 +29,7 @@ NOT DONE
 - Tor v3 onion services: not implemented (ruling in PLAN.md Decisions)
 - TCP transport between two phones: not run; loopback only
 - running the native library or the chat screen on a device or emulator: not done
-- handshake authentication of the initiator: not done (PLAN.md Decisions)
+- handshake authentication of the initiator: done via static-static DH and the responder's pin (PLAN.md Decisions, 2026-10-24); not independently reviewed; no key-confirmation message; both phones must scan each other's QR first
 - QR onboarding camera scan on a device, APK transfer between phones, signed-update delivery: not verified or not started
 - ratchet DH step (post-compromise security): not started
 

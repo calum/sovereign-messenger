@@ -25,7 +25,8 @@ pub const TAG_MESSAGE: u8 = 0x02;
 /// ML-KEM-768 ciphertext length in bytes (FIPS 203). Checked in tests against the library.
 pub const MLKEM768_CT_LEN: usize = 1088;
 const EPHEMERAL_LEN: usize = 32;
-const HANDSHAKE_LEN: usize = 1 + EPHEMERAL_LEN + MLKEM768_CT_LEN;
+const STATIC_LEN: usize = 32;
+const HANDSHAKE_LEN: usize = 1 + EPHEMERAL_LEN + STATIC_LEN + MLKEM768_CT_LEN;
 const MESSAGE_HEADER_LEN: usize = 1 + 8;
 /// A ChaCha20-Poly1305 ciphertext is at least the 16-byte tag.
 const MESSAGE_MIN_LEN: usize = MESSAGE_HEADER_LEN + 16;
@@ -37,6 +38,7 @@ pub fn encode_handshake(init: &HandshakeInit) -> Vec<u8> {
     let mut out = Vec::with_capacity(HANDSHAKE_LEN);
     out.push(TAG_HANDSHAKE);
     out.extend_from_slice(&init.ephemeral_x25519);
+    out.extend_from_slice(&init.initiator_x25519);
     out.extend_from_slice(&init.mlkem_ct);
     out
 }
@@ -45,11 +47,15 @@ pub fn decode_handshake(frame: &[u8]) -> Result<HandshakeInit, CoreError> {
     if frame.len() != HANDSHAKE_LEN || frame[0] != TAG_HANDSHAKE {
         return Err(CoreError::Malformed);
     }
+    let static_at = 1 + EPHEMERAL_LEN;
     let mut ephemeral_x25519 = [0u8; EPHEMERAL_LEN];
-    ephemeral_x25519.copy_from_slice(&frame[1..1 + EPHEMERAL_LEN]);
+    ephemeral_x25519.copy_from_slice(&frame[1..static_at]);
+    let mut initiator_x25519 = [0u8; STATIC_LEN];
+    initiator_x25519.copy_from_slice(&frame[static_at..static_at + STATIC_LEN]);
     Ok(HandshakeInit {
         ephemeral_x25519,
-        mlkem_ct: frame[1 + EPHEMERAL_LEN..].to_vec(),
+        initiator_x25519,
+        mlkem_ct: frame[static_at + STATIC_LEN..].to_vec(),
     })
 }
 
@@ -82,14 +88,16 @@ pub fn receive_handshake(link: &dyn Transport) -> Result<HandshakeInit, CoreErro
 }
 
 /// Seals `plaintext` on `chain` and sends it. The chain advances only after the
-/// frame is handed to the transport, so a failed send leaves the caller to decide.
+/// transport accepts the frame. A failed write leaves the counter where it was,
+/// so the peer's next expected counter still matches our next frame.
 pub fn send_message(
     link: &dyn Transport,
     chain: &mut Chain,
     plaintext: &[u8],
 ) -> Result<(), CoreError> {
-    let sealed = chain.seal(plaintext)?;
-    link.send(&encode_message(&sealed)).map_err(map_transport)
+    chain.seal_with(plaintext, |sealed| {
+        link.send(&encode_message(sealed)).map_err(map_transport)
+    })
 }
 
 /// Receives one message and opens it on `chain`. A tampered frame returns
@@ -141,18 +149,19 @@ mod tests {
 
     #[test]
     fn handshake_frame_round_trips() {
-        let (_me, public) = Identity::generate();
-        let (init, _root) = initiate(&public).unwrap();
+        let (me, public) = Identity::generate();
+        let (init, _root) = initiate(&me, &public).unwrap();
         let frame = encode_handshake(&init);
         let back = decode_handshake(&frame).unwrap();
         assert_eq!(back.ephemeral_x25519, init.ephemeral_x25519);
+        assert_eq!(back.initiator_x25519, init.initiator_x25519);
         assert_eq!(back.mlkem_ct, init.mlkem_ct);
     }
 
     #[test]
     fn handshake_frame_with_wrong_length_is_refused() {
-        let (_me, public) = Identity::generate();
-        let (init, _root) = initiate(&public).unwrap();
+        let (me, public) = Identity::generate();
+        let (init, _root) = initiate(&me, &public).unwrap();
         let mut frame = encode_handshake(&init);
         frame.pop();
         assert!(matches!(
@@ -169,8 +178,8 @@ mod tests {
 
     #[test]
     fn frame_with_wrong_tag_is_refused() {
-        let (_me, public) = Identity::generate();
-        let (init, _root) = initiate(&public).unwrap();
+        let (me, public) = Identity::generate();
+        let (init, _root) = initiate(&me, &public).unwrap();
         let mut frame = encode_handshake(&init);
         frame[0] = TAG_MESSAGE;
         assert!(matches!(
@@ -199,8 +208,8 @@ mod tests {
 
     #[test]
     fn mlkem_ciphertext_length_matches_the_library() {
-        let (_me, public) = Identity::generate();
-        let (init, _root) = initiate(&public).unwrap();
+        let (me, public) = Identity::generate();
+        let (init, _root) = initiate(&me, &public).unwrap();
         assert_eq!(init.mlkem_ct.len(), MLKEM768_CT_LEN);
     }
 }

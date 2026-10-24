@@ -34,6 +34,8 @@ pub struct PublicIdentity {
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct HandshakeMessage {
     pub ephemeral_x25519: Vec<u8>,
+    /// The initiator's long-term X25519 public key. The responder checks it against its pin.
+    pub initiator_x25519: Vec<u8>,
     pub mlkem_ct: Vec<u8>,
 }
 
@@ -221,8 +223,8 @@ impl Messenger {
         peer: PublicIdentity,
     ) -> Result<HandshakeMessage, FacadeError> {
         let peer = to_core_public(peer)?;
-        let (init, root) = handshake::initiate(&peer)?;
         let mut st = self.lock()?;
+        let (init, root) = handshake::initiate(&st.identity, &peer)?;
         pin_or_check(&mut st, &peer_id, &peer)?;
         st.sessions.insert(
             peer_id,
@@ -235,11 +237,14 @@ impl Messenger {
         );
         Ok(HandshakeMessage {
             ephemeral_x25519: init.ephemeral_x25519.to_vec(),
+            initiator_x25519: init.initiator_x25519.to_vec(),
             mlkem_ct: init.mlkem_ct,
         })
     }
 
     /// Responder side: derive the same root from the initiator's handshake message.
+    /// Refuses with `NotPinned` if `peer_id` has no pin, and with `AuthFailed` if the
+    /// initiator's static key is not the pinned one.
     pub fn accept_session(
         &self,
         peer_id: String,
@@ -247,10 +252,12 @@ impl Messenger {
     ) -> Result<(), FacadeError> {
         let init = handshake::HandshakeInit {
             ephemeral_x25519: to_array32(&init.ephemeral_x25519)?,
+            initiator_x25519: to_array32(&init.initiator_x25519)?,
             mlkem_ct: init.mlkem_ct,
         };
         let mut st = self.lock()?;
-        let root = handshake::respond(&st.identity, &init)?;
+        let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
+        let root = handshake::respond(&st.identity, &pinned, &init)?;
         st.sessions.insert(
             peer_id,
             Arc::new(session_for(
@@ -291,13 +298,11 @@ impl Messenger {
     /// Dials `addr` (for example `192.168.1.20:47001`) and runs the handshake
     /// with the identity pinned for `peer_id`. The socket stays open for the session.
     pub fn connect_peer(&self, peer_id: String, addr: String) -> Result<(), FacadeError> {
-        let peer = self
-            .lock()?
-            .pins
-            .get(&peer_id)
-            .cloned()
-            .ok_or(FacadeError::NotPinned)?;
-        let (init, root) = handshake::initiate(&peer)?;
+        let (init, root) = {
+            let st = self.lock()?;
+            let peer = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
+            handshake::initiate(&st.identity, peer)?
+        };
         let link: Arc<dyn Transport> = Arc::new(
             TcpTransport::connect(&addr, CONNECT_TIMEOUT).map_err(|_| FacadeError::Network)?,
         );
@@ -320,6 +325,11 @@ impl Messenger {
         bind_addr: String,
         timeout_secs: u32,
     ) -> Result<(), FacadeError> {
+        // Refuse before binding: a peer with no pin cannot be authenticated.
+        self.lock()?
+            .pins
+            .get(&peer_id)
+            .ok_or(FacadeError::NotPinned)?;
         let listener = TcpListener::bind(&bind_addr).map_err(|_| FacadeError::Network)?;
         let link: Arc<dyn Transport> = Arc::new(
             TcpTransport::accept(&listener, Duration::from_secs(u64::from(timeout_secs)))
@@ -327,17 +337,16 @@ impl Messenger {
         );
         drop(listener); // one peer per listen call
         let init = wire::receive_handshake(link.as_ref())?;
-        let root = {
-            let st = self.lock()?;
-            handshake::respond(&st.identity, &init)?
-        };
+        let mut st = self.lock()?;
+        let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
+        let root = handshake::respond(&st.identity, &pinned, &init)?;
         let session = session_for(
             &root,
             RESPONDER_TO_INITIATOR,
             INITIATOR_TO_RESPONDER,
             Some(link),
         );
-        self.lock()?.sessions.insert(peer_id, Arc::new(session));
+        st.sessions.insert(peer_id, Arc::new(session));
         Ok(())
     }
 

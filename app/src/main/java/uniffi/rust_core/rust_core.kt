@@ -902,7 +902,7 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if ((lib.uniffi_rust_core_checksum_method_messenger_accept_session() and 0xFFFF) != 55771) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_accept_session() and 0xFFFF) != 36325) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_connect_peer() and 0xFFFF) != 47327) {
@@ -1370,6 +1370,8 @@ public interface MessengerInterface {
     
     /**
      * Responder side: derive the same root from the initiator's handshake message.
+     * Refuses with `NotPinned` if `peer_id` has no pin, and with `AuthFailed` if the
+     * initiator's static key is not the pinned one.
      */
     fun `acceptSession`(`peerId`: kotlin.String, `init`: HandshakeMessage)
     
@@ -1601,6 +1603,8 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     
     /**
      * Responder side: derive the same root from the initiator's handshake message.
+     * Refuses with `NotPinned` if `peer_id` has no pin, and with `AuthFailed` if the
+     * initiator's static key is not the pinned one.
      */
     @Throws(FacadeException::class)override fun `acceptSession`(`peerId`: kotlin.String, `init`: HandshakeMessage)
         = 
@@ -2011,6 +2015,11 @@ public object FfiConverterTypeMessenger: FfiConverter<Messenger, Long> {
 data class HandshakeMessage (
     var `ephemeralX25519`: kotlin.ByteArray
     , 
+    /**
+     * The initiator's long-term X25519 public key. The responder checks it against its pin.
+     */
+    var `initiatorX25519`: kotlin.ByteArray
+    , 
     var `mlkemCt`: kotlin.ByteArray
     
 ){
@@ -2030,16 +2039,19 @@ public object FfiConverterTypeHandshakeMessage: FfiConverterRustBuffer<Handshake
         return HandshakeMessage(
             FfiConverterByteArray.read(buf),
             FfiConverterByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
         )
     }
 
     override fun allocationSize(value: HandshakeMessage) = (
             FfiConverterByteArray.allocationSize(value.`ephemeralX25519`) +
+            FfiConverterByteArray.allocationSize(value.`initiatorX25519`) +
             FfiConverterByteArray.allocationSize(value.`mlkemCt`)
     )
 
     override fun write(value: HandshakeMessage, buf: ByteBuffer) {
             FfiConverterByteArray.write(value.`ephemeralX25519`, buf)
+            FfiConverterByteArray.write(value.`initiatorX25519`, buf)
             FfiConverterByteArray.write(value.`mlkemCt`, buf)
     }
 }

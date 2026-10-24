@@ -26,6 +26,11 @@ fn messages_flow_both_ways_over_tcp() {
             bob.own_pairing_payload(String::new()).unwrap(),
         )
         .unwrap();
+    bob.scan_pairing(
+        "alice".into(),
+        alice.own_pairing_payload(String::new()).unwrap(),
+    )
+    .unwrap();
 
     let addr = free_port();
     let bob_side: Arc<Messenger> = Arc::clone(&bob);
@@ -104,6 +109,11 @@ fn peer_disconnect_is_reported_as_a_network_error() {
             bob.own_pairing_payload(String::new()).unwrap(),
         )
         .unwrap();
+    bob.scan_pairing(
+        "alice".into(),
+        alice.own_pairing_payload(String::new()).unwrap(),
+    )
+    .unwrap();
     let addr = free_port();
     let bob_side = Arc::clone(&bob);
     let listen_addr = addr.clone();
@@ -124,9 +134,24 @@ fn peer_disconnect_is_reported_as_a_network_error() {
 
 #[test]
 fn listen_times_out_when_nobody_connects() {
+    let alice = Messenger::new();
     let bob = Messenger::new();
+    bob.scan_pairing(
+        "alice".into(),
+        alice.own_pairing_payload(String::new()).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         bob.listen_for_peer("alice".into(), free_port(), 1),
         Err(FacadeError::Network)
+    );
+}
+
+#[test]
+fn listen_refused_without_a_pinned_identity() {
+    let bob = Messenger::new();
+    assert_eq!(
+        bob.listen_for_peer("alice".into(), free_port(), 1),
+        Err(FacadeError::NotPinned)
     );
 }
