@@ -68,4 +68,18 @@ class CoreBridge(private val messenger: Messenger = Messenger()) {
     fun acceptNewKey(peer: String) {
         messenger.unpin(peer)
     }
+
+    /**
+     * Fingerprint of the developer key compiled into this build, shown on the update
+     * screen. Null when no key is pinned; every update is then refused.
+     */
+    fun developerKeyFingerprint(): String? = messenger.developerKeyFingerprint()
+
+    /**
+     * Listens on [bindAddr] for one sender and returns the APK bytes only if their
+     * signature verifies against the compiled-in developer key. Blocking; the caller
+     * runs it off the UI thread. Throws [FacadeException] otherwise.
+     */
+    fun receiveUpdate(bindAddr: String, timeoutSecs: Int): ByteArray =
+        messenger.receiveUpdate(bindAddr, timeoutSecs.toUInt()).apk
 }

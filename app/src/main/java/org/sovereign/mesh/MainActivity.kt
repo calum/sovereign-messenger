@@ -16,6 +16,8 @@ import org.sovereign.mesh.ui.ChatScreen
 import org.sovereign.mesh.ui.ChatListScreen
 import org.sovereign.mesh.ui.PairingScreen
 import org.sovereign.mesh.ui.TourScreen
+import org.sovereign.mesh.ui.UpdateScreen
+import org.sovereign.mesh.update.UpdateInstaller
 
 class MainActivity : ComponentActivity() {
 
@@ -23,6 +25,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Blocks screenshots, screen recording and the recent-apps thumbnail.
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        // A staged APK is deleted on every start, in case the last run ended before its cleanup.
+        UpdateInstaller.deleteStaged(this)
 
         setContent {
             MaterialTheme {
@@ -30,10 +34,12 @@ class MainActivity : ComponentActivity() {
                     var showTour by remember { mutableStateOf(true) }
                     var openPeer by remember { mutableStateOf<String?>(null) }
                     var showPairing by remember { mutableStateOf(false) }
+                    var showUpdate by remember { mutableStateOf(false) }
 
                     when {
                         showTour -> TourScreen(onFinished = { showTour = false })
                         showPairing -> PairingScreen(onBack = { showPairing = false })
+                        showUpdate -> UpdateScreen(onBack = { showUpdate = false })
                         openPeer != null -> ChatScreen(
                             peer = openPeer!!,
                             onBack = { openPeer = null },
@@ -41,6 +47,7 @@ class MainActivity : ComponentActivity() {
                         else -> ChatListScreen(
                             onOpenChat = { openPeer = it },
                             onPair = { showPairing = true },
+                            onUpdate = { showUpdate = true },
                         )
                     }
                 }

@@ -679,6 +679,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_connect_peer(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_developer_key_fingerprint(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_forget(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_history(
@@ -703,6 +705,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_receive_from_peer(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_receive_update(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_scan_pairing(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_send(
@@ -712,6 +716,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_rust_core_checksum_method_messenger_start_session(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_unpin(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_verify_update(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_wipe_all(
     ): Int
@@ -747,6 +753,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_connect_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,`addr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_developer_key_fingerprint(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_forget(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_history(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -771,6 +779,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_receive_from_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_rust_core_fn_method_messenger_receive_update(`ptr`: Long,`bindAddr`: RustBuffer.ByValue,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_scan_pairing(`ptr`: Long,`peerId`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_send(`ptr`: Long,`peerId`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -780,6 +790,8 @@ internal object UniffiLib {
     external fun uniffi_rust_core_fn_method_messenger_start_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`peer`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_unpin(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_verify_update(`ptr`: Long,`apk`: RustBuffer.ByValue,`signature`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_wipe_all(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -908,6 +920,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_connect_peer() and 0xFFFF) != 47327) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_developer_key_fingerprint() and 0xFFFF) != 29530) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_method_messenger_forget() and 0xFFFF) != 56790) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -944,6 +959,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_receive_from_peer() and 0xFFFF) != 17368) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_receive_update() and 0xFFFF) != 44392) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_method_messenger_scan_pairing() and 0xFFFF) != 38189) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -957,6 +975,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_unpin() and 0xFFFF) != 28018) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_verify_update() and 0xFFFF) != 8499) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_wipe_all() and 0xFFFF) != 51025) {
@@ -1382,6 +1403,12 @@ public interface MessengerInterface {
     fun `connectPeer`(`peerId`: kotlin.String, `addr`: kotlin.String)
     
     /**
+     * Fingerprint of the developer key compiled into this build, for the update
+     * screen. `None` when no key is pinned, in which case every update is refused.
+     */
+    fun `developerKeyFingerprint`(): kotlin.String?
+    
+    /**
      * Ends one conversation and its ratchet state. The pin stays (see `unpin`).
      */
     fun `forget`(`peerId`: kotlin.String)
@@ -1445,6 +1472,13 @@ public interface MessengerInterface {
     fun `receiveFromPeer`(`peerId`: kotlin.String): kotlin.Boolean
     
     /**
+     * Listens on `bind_addr` (the update port is 47002) for one sender, reads one
+     * APK, and returns it only if its signature verifies. Blocks; the app runs it
+     * off the UI thread. Nothing is written to disk here.
+     */
+    fun `receiveUpdate`(`bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt): VerifiedUpdate
+    
+    /**
      * Pins the identity in a scanned QR code for `peer_id` (trust on first use).
      * Refuses a malformed payload, a different key for a pinned peer
      * (`PinChanged`), and a second scan of the same key (`DuplicatePin`).
@@ -1474,6 +1508,12 @@ public interface MessengerInterface {
      * and any session for `peer_id`; the next scan or handshake pins again.
      */
     fun `unpin`(`peerId`: kotlin.String)
+    
+    /**
+     * Checks an APK's detached Ed25519 signature against the compiled-in developer key.
+     * Refuses a signature that is not 64 bytes (`Malformed`) and a bad one (`AuthFailed`).
+     */
+    fun `verifyUpdate`(`apk`: kotlin.ByteArray, `signature`: kotlin.ByteArray)
     
     /**
      * Wipes all sessions and history, and closes their connections. The app
@@ -1637,6 +1677,23 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 }
     }
     
+    
+
+    
+    /**
+     * Fingerprint of the developer key compiled into this build, for the update
+     * screen. `None` when no key is pinned, in which case every update is refused.
+     */override fun `developerKeyFingerprint`(): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_developer_key_fingerprint(
+        it,
+        _status)
+}
+    }
+    )
+    }
     
 
     
@@ -1855,6 +1912,27 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
+     * Listens on `bind_addr` (the update port is 47002) for one sender, reads one
+     * APK, and returns it only if its signature verifies. Blocks; the app runs it
+     * off the UI thread. Nothing is written to disk here.
+     */
+    @Throws(FacadeException::class)override fun `receiveUpdate`(`bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt): VerifiedUpdate {
+            return FfiConverterTypeVerifiedUpdate.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_receive_update(
+        it,
+        
+        FfiConverterString.lower(`bindAddr`),
+        FfiConverterUInt.lower(`timeoutSecs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Pins the identity in a scanned QR code for `peer_id` (trust on first use).
      * Refuses a malformed payload, a different key for a pinned peer
      * (`PinChanged`), and a second scan of the same key (`DuplicatePin`).
@@ -1946,6 +2024,25 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
         it,
         
         FfiConverterString.lower(`peerId`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Checks an APK's detached Ed25519 signature against the compiled-in developer key.
+     * Refuses a signature that is not 64 bytes (`Malformed`) and a bad one (`AuthFailed`).
+     */
+    @Throws(FacadeException::class)override fun `verifyUpdate`(`apk`: kotlin.ByteArray, `signature`: kotlin.ByteArray)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_verify_update(
+        it,
+        
+        FfiConverterByteArray.lower(`apk`),
+        FfiConverterByteArray.lower(`signature`),_status)
 }
     }
     
@@ -2190,6 +2287,42 @@ public object FfiConverterTypeScannedPeer: FfiConverterRustBuffer<ScannedPeer> {
     override fun write(value: ScannedPeer, buf: ByteBuffer) {
             FfiConverterString.write(value.`fingerprint`, buf)
             FfiConverterString.write(value.`connectionHint`, buf)
+    }
+}
+
+
+
+/**
+ * An update whose signature has checked out. Only this type reaches the install step.
+ */
+data class VerifiedUpdate (
+    var `apk`: kotlin.ByteArray
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeVerifiedUpdate: FfiConverterRustBuffer<VerifiedUpdate> {
+    override fun read(buf: ByteBuffer): VerifiedUpdate {
+        return VerifiedUpdate(
+            FfiConverterByteArray.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: VerifiedUpdate) = (
+            FfiConverterByteArray.allocationSize(value.`apk`)
+    )
+
+    override fun write(value: VerifiedUpdate, buf: ByteBuffer) {
+            FfiConverterByteArray.write(value.`apk`, buf)
     }
 }
 

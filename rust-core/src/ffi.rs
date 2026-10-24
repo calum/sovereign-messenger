@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use zeroize::Zeroize;
 
+use crate::apk_transfer;
 use crate::double_ratchet::{DoubleRatchet, Header, Message};
 use crate::error::CoreError;
 use crate::handshake::{self, Identity, IdentityPublic};
@@ -21,6 +22,7 @@ use crate::pairing;
 use crate::secret::{Key32, SecretBytes};
 use crate::store::Store;
 use crate::transport::{TcpTransport, Transport};
+use crate::update;
 use crate::wire::{self, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
 
 /// Public identity, safe to show in a QR code. Holds no secret material.
@@ -59,6 +61,12 @@ pub struct WireMessage {
     /// Position of this message in the sending chain.
     pub counter: u64,
     pub ciphertext: Vec<u8>,
+}
+
+/// An update whose signature has checked out. Only this type reaches the install step.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct VerifiedUpdate {
+    pub apk: Vec<u8>,
 }
 
 /// Whether memory locking took effect. Counts and a boolean only.
@@ -429,6 +437,36 @@ impl Messenger {
         Ok(())
     }
 
+    /// Fingerprint of the developer key compiled into this build, for the update
+    /// screen. `None` when no key is pinned, in which case every update is refused.
+    pub fn developer_key_fingerprint(&self) -> Option<String> {
+        update::DEVELOPER_PUBLIC_KEY.map(|key| update::developer_key_fingerprint(&key))
+    }
+
+    /// Checks an APK's detached Ed25519 signature against the compiled-in developer key.
+    /// Refuses a signature that is not 64 bytes (`Malformed`) and a bad one (`AuthFailed`).
+    pub fn verify_update(&self, apk: Vec<u8>, signature: Vec<u8>) -> Result<(), FacadeError> {
+        Ok(update::verify_update(&apk, &signature)?)
+    }
+
+    /// Listens on `bind_addr` (the update port is 47002) for one sender, reads one
+    /// APK, and returns it only if its signature verifies. Blocks; the app runs it
+    /// off the UI thread. Nothing is written to disk here.
+    pub fn receive_update(
+        &self,
+        bind_addr: String,
+        timeout_secs: u32,
+    ) -> Result<VerifiedUpdate, FacadeError> {
+        let mut apk = Vec::new();
+        let signature = apk_transfer::receive_update_on(
+            &bind_addr,
+            Duration::from_secs(u64::from(timeout_secs)),
+            &mut apk,
+        )?;
+        update::verify_update(&apk, &signature)?;
+        Ok(VerifiedUpdate { apk })
+    }
+
     /// Reports whether `mlock` took effect. The core cannot stop the OS from
     /// swapping unlocked pages, so the app needs this to tell the user.
     pub fn lock_report(&self) -> Result<LockReport, FacadeError> {
@@ -507,4 +545,19 @@ fn to_core_public(p: PublicIdentity) -> Result<IdentityPublic, FacadeError> {
 
 fn to_array32(bytes: &[u8]) -> Result<[u8; 32], FacadeError> {
     bytes.try_into().map_err(|_| FacadeError::Malformed)
+}
+
+#[cfg(test)]
+mod update_facade_tests {
+    use super::*;
+
+    #[test]
+    fn facade_refuses_every_update_while_no_key_is_compiled_in() {
+        let m = Messenger::new();
+        assert_eq!(m.developer_key_fingerprint(), None);
+        assert_eq!(
+            m.verify_update(b"apk".to_vec(), vec![0u8; 64]),
+            Err(FacadeError::AuthFailed)
+        );
+    }
 }
