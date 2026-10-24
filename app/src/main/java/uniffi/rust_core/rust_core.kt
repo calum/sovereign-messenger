@@ -721,6 +721,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_send_over_transport(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_send_update(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_start_session(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_unpin(
@@ -810,6 +812,8 @@ internal object UniffiLib {
     external fun uniffi_rust_core_fn_method_messenger_send(`ptr`: Long,`peerId`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_send_over_transport(`ptr`: Long,`peerId`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_send_update(`ptr`: Long,`addr`: RustBuffer.ByValue,`timeoutSecs`: Int,`apk`: RustBuffer.ByValue,`version`: Long,`signature`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_start_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`peer`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1017,6 +1021,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_send_over_transport() and 0xFFFF) != 17166) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_send_update() and 0xFFFF) != 43295) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_start_session() and 0xFFFF) != 24895) {
@@ -1613,6 +1620,17 @@ public interface MessengerInterface {
     fun `sendOverTransport`(`peerId`: kotlin.String, `text`: kotlin.String)
     
     /**
+     * Dials `addr` (the receiver's update port, 47002) and forwards one bundle:
+     * the APK, the developer's 64-byte Ed25519 signature over it, and the version.
+     * The phone never signs; the signature comes from the developer's PC. A
+     * signature that is not 64 bytes, or an APK that is empty or over
+     * `MAX_APK_LEN`, is refused as `Malformed` before any connection is opened.
+     * The receiver verifies the bundle itself, so a bad bundle is refused there.
+     * Nothing is written to disk and no APK byte appears in an error.
+     */
+    fun `sendUpdate`(`addr`: kotlin.String, `timeoutSecs`: kotlin.UInt, `apk`: kotlin.ByteArray, `version`: kotlin.ULong, `signature`: kotlin.ByteArray)
+    
+    /**
      * Initiator side: encapsulate to the peer's identity and open a session, bound to
      * the responder's `challenge`. Pins the identity on first use; refuses a different
      * key for a pinned peer.
@@ -2184,6 +2202,33 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
         
         FfiConverterString.lower(`peerId`),
         FfiConverterString.lower(`text`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Dials `addr` (the receiver's update port, 47002) and forwards one bundle:
+     * the APK, the developer's 64-byte Ed25519 signature over it, and the version.
+     * The phone never signs; the signature comes from the developer's PC. A
+     * signature that is not 64 bytes, or an APK that is empty or over
+     * `MAX_APK_LEN`, is refused as `Malformed` before any connection is opened.
+     * The receiver verifies the bundle itself, so a bad bundle is refused there.
+     * Nothing is written to disk and no APK byte appears in an error.
+     */
+    @Throws(FacadeException::class)override fun `sendUpdate`(`addr`: kotlin.String, `timeoutSecs`: kotlin.UInt, `apk`: kotlin.ByteArray, `version`: kotlin.ULong, `signature`: kotlin.ByteArray)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_send_update(
+        it,
+        
+        FfiConverterString.lower(`addr`),
+        FfiConverterUInt.lower(`timeoutSecs`),
+        FfiConverterByteArray.lower(`apk`),
+        FfiConverterULong.lower(`version`),
+        FfiConverterByteArray.lower(`signature`),_status)
 }
     }
     

@@ -579,6 +579,38 @@ impl Messenger {
         Ok(VerifiedUpdate { apk })
     }
 
+    /// Dials `addr` (the receiver's update port, 47002) and forwards one bundle:
+    /// the APK, the developer's 64-byte Ed25519 signature over it, and the version.
+    /// The phone never signs; the signature comes from the developer's PC. A
+    /// signature that is not 64 bytes, or an APK that is empty or over
+    /// `MAX_APK_LEN`, is refused as `Malformed` before any connection is opened.
+    /// The receiver verifies the bundle itself, so a bad bundle is refused there.
+    /// Nothing is written to disk and no APK byte appears in an error.
+    pub fn send_update(
+        &self,
+        addr: String,
+        timeout_secs: u32,
+        apk: Vec<u8>,
+        version: u64,
+        signature: Vec<u8>,
+    ) -> Result<(), FacadeError> {
+        let sig: [u8; apk_transfer::SIGNATURE_LEN] = signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| FacadeError::Malformed)?;
+        // The cap is the APK cap, not the 64 KiB control-frame cap: a real APK is far larger.
+        if apk.is_empty() || apk.len() > apk_transfer::MAX_APK_LEN {
+            return Err(FacadeError::Malformed);
+        }
+        Ok(apk_transfer::send_update_to(
+            &addr,
+            Duration::from_secs(u64::from(timeout_secs)),
+            version,
+            &sig,
+            &apk,
+        )?)
+    }
+
     /// Reports whether `mlock` took effect. The core cannot stop the OS from
     /// swapping unlocked pages, so the app needs this to tell the user.
     pub fn lock_report(&self) -> Result<LockReport, FacadeError> {
