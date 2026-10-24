@@ -677,9 +677,13 @@ internal object IntegrityCheckingUniffiLib {
     internal fun ensureInitialized() = Unit
     external fun uniffi_rust_core_checksum_method_messenger_accept_session(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_connect_peer(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_forget(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_history(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_listen_for_peer(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_lock_report(
     ): Int
@@ -697,9 +701,13 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_receive(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_receive_from_peer(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_scan_pairing(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_send(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_send_over_transport(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_start_session(
     ): Int
@@ -737,10 +745,14 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_rust_core_fn_method_messenger_accept_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`init`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_connect_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,`addr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_rust_core_fn_method_messenger_forget(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_history(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_listen_for_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,`bindAddr`: RustBuffer.ByValue,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_rust_core_fn_method_messenger_lock_report(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_own_fingerprint(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -757,10 +769,14 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_receive(`ptr`: Long,`peerId`: RustBuffer.ByValue,`msg`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_receive_from_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_rust_core_fn_method_messenger_scan_pairing(`ptr`: Long,`peerId`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_send(`ptr`: Long,`peerId`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_send_over_transport(`ptr`: Long,`peerId`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_rust_core_fn_method_messenger_start_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`peer`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_unpin(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -889,10 +905,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_accept_session() and 0xFFFF) != 55771) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_connect_peer() and 0xFFFF) != 47327) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_method_messenger_forget() and 0xFFFF) != 56790) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_history() and 0xFFFF) != 16097) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_listen_for_peer() and 0xFFFF) != 38529) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_lock_report() and 0xFFFF) != 17259) {
@@ -916,13 +938,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_pinned_peers() and 0xFFFF) != 23966) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_rust_core_checksum_method_messenger_receive() and 0xFFFF) != 55516) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_receive() and 0xFFFF) != 39308) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_receive_from_peer() and 0xFFFF) != 17368) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_scan_pairing() and 0xFFFF) != 38189) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_rust_core_checksum_method_messenger_send() and 0xFFFF) != 8760) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_send() and 0xFFFF) != 51341) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_send_over_transport() and 0xFFFF) != 17166) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_start_session() and 0xFFFF) != 3175) {
@@ -931,7 +959,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_unpin() and 0xFFFF) != 28018) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_rust_core_checksum_method_messenger_wipe_all() and 0xFFFF) != 64926) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_wipe_all() and 0xFFFF) != 51025) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_constructor_messenger_new() and 0xFFFF) != 30152) {
@@ -1092,6 +1120,29 @@ private class JavaLangRefCleanable(
     val cleanable: java.lang.ref.Cleaner.Cleanable
 ) : UniffiCleaner.Cleanable {
     override fun clean() = cleanable.clean()
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
 }
 
 /**
@@ -1323,6 +1374,12 @@ public interface MessengerInterface {
     fun `acceptSession`(`peerId`: kotlin.String, `init`: HandshakeMessage)
     
     /**
+     * Dials `addr` (for example `192.168.1.20:47001`) and runs the handshake
+     * with the identity pinned for `peer_id`. The socket stays open for the session.
+     */
+    fun `connectPeer`(`peerId`: kotlin.String, `addr`: kotlin.String)
+    
+    /**
      * Ends one conversation and its ratchet state. The pin stays (see `unpin`).
      */
     fun `forget`(`peerId`: kotlin.String)
@@ -1332,6 +1389,12 @@ public interface MessengerInterface {
      * Kotlin owns; the Rust copies are zeroized when the store drops them.
      */
     fun `history`(`peerId`: kotlin.String): List<kotlin.String>
+    
+    /**
+     * Binds `bind_addr` and waits up to `timeout_secs` for one peer to connect.
+     * Blocks the calling thread; the app runs it off the UI thread.
+     */
+    fun `listenForPeer`(`peerId`: kotlin.String, `bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt)
     
     /**
      * Reports whether `mlock` took effect. The core cannot stop the OS from
@@ -1367,10 +1430,17 @@ public interface MessengerInterface {
     fun `pinnedPeers`(): List<kotlin.String>
     
     /**
-     * Opens a message from the peer. A tampered, replayed or out-of-order
-     * message is rejected and leaves the chain where it was.
+     * Opens a message from the peer without a network receive. A tampered,
+     * replayed or out-of-order message is rejected and leaves the chain where it was.
      */
     fun `receive`(`peerId`: kotlin.String, `msg`: WireMessage)
+    
+    /**
+     * Waits for one message from the peer over its open connection. Returns
+     * `Ok(false)` if nothing arrived within the poll interval, so the caller can
+     * stop its loop; `Ok(true)` when a message was opened and stored.
+     */
+    fun `receiveFromPeer`(`peerId`: kotlin.String): kotlin.Boolean
     
     /**
      * Pins the identity in a scanned QR code for `peer_id` (trust on first use).
@@ -1380,10 +1450,16 @@ public interface MessengerInterface {
     fun `scanPairing`(`peerId`: kotlin.String, `payload`: kotlin.ByteArray): ScannedPeer
     
     /**
-     * Seals the text for the peer and records it locally. The returned wire
-     * message is what a transport would carry (no transport exists yet).
+     * Seals the text for the peer and records it locally, without a network send.
+     * `send_over_transport` is the path that transmits.
      */
     fun `send`(`peerId`: kotlin.String, `text`: kotlin.String): WireMessage
+    
+    /**
+     * Seals `text` and sends it over the peer's open connection. Records it
+     * locally only after the frame has been handed to the socket.
+     */
+    fun `sendOverTransport`(`peerId`: kotlin.String, `text`: kotlin.String)
     
     /**
      * Initiator side: encapsulate to the peer's identity and open a session.
@@ -1398,8 +1474,9 @@ public interface MessengerInterface {
     fun `unpin`(`peerId`: kotlin.String)
     
     /**
-     * Wipes all sessions and history. The app calls this when it leaves the foreground.
-     * Pins are kept on purpose: a wiped pin would let a new QR code replace a trusted key.
+     * Wipes all sessions and history, and closes their connections. The app
+     * calls this when it leaves the foreground. Pins are kept on purpose: a
+     * wiped pin would let a new QR code replace a trusted key.
      */
     fun `wipeAll`()
     
@@ -1541,6 +1618,25 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
+     * Dials `addr` (for example `192.168.1.20:47001`) and runs the handshake
+     * with the identity pinned for `peer_id`. The socket stays open for the session.
+     */
+    @Throws(FacadeException::class)override fun `connectPeer`(`peerId`: kotlin.String, `addr`: kotlin.String)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_connect_peer(
+        it,
+        
+        FfiConverterString.lower(`peerId`),
+        FfiConverterString.lower(`addr`),_status)
+}
+    }
+    
+    
+
+    
+    /**
      * Ends one conversation and its ratchet state. The pin stays (see `unpin`).
      */
     @Throws(FacadeException::class)override fun `forget`(`peerId`: kotlin.String)
@@ -1573,6 +1669,26 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Binds `bind_addr` and waits up to `timeout_secs` for one peer to connect.
+     * Blocks the calling thread; the app runs it off the UI thread.
+     */
+    @Throws(FacadeException::class)override fun `listenForPeer`(`peerId`: kotlin.String, `bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_listen_for_peer(
+        it,
+        
+        FfiConverterString.lower(`peerId`),
+        FfiConverterString.lower(`bindAddr`),
+        FfiConverterUInt.lower(`timeoutSecs`),_status)
+}
+    }
+    
     
 
     
@@ -1696,8 +1812,8 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
-     * Opens a message from the peer. A tampered, replayed or out-of-order
-     * message is rejected and leaves the chain where it was.
+     * Opens a message from the peer without a network receive. A tampered,
+     * replayed or out-of-order message is rejected and leaves the chain where it was.
      */
     @Throws(FacadeException::class)override fun `receive`(`peerId`: kotlin.String, `msg`: WireMessage)
         = 
@@ -1711,6 +1827,26 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 }
     }
     
+    
+
+    
+    /**
+     * Waits for one message from the peer over its open connection. Returns
+     * `Ok(false)` if nothing arrived within the poll interval, so the caller can
+     * stop its loop; `Ok(true)` when a message was opened and stored.
+     */
+    @Throws(FacadeException::class)override fun `receiveFromPeer`(`peerId`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_receive_from_peer(
+        it,
+        
+        FfiConverterString.lower(`peerId`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -1736,8 +1872,8 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
-     * Seals the text for the peer and records it locally. The returned wire
-     * message is what a transport would carry (no transport exists yet).
+     * Seals the text for the peer and records it locally, without a network send.
+     * `send_over_transport` is the path that transmits.
      */
     @Throws(FacadeException::class)override fun `send`(`peerId`: kotlin.String, `text`: kotlin.String): WireMessage {
             return FfiConverterTypeWireMessage.lift(
@@ -1752,6 +1888,25 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Seals `text` and sends it over the peer's open connection. Records it
+     * locally only after the frame has been handed to the socket.
+     */
+    @Throws(FacadeException::class)override fun `sendOverTransport`(`peerId`: kotlin.String, `text`: kotlin.String)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_send_over_transport(
+        it,
+        
+        FfiConverterString.lower(`peerId`),
+        FfiConverterString.lower(`text`),_status)
+}
+    }
+    
     
 
     
@@ -1794,8 +1949,9 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
-     * Wipes all sessions and history. The app calls this when it leaves the foreground.
-     * Pins are kept on purpose: a wiped pin would let a new QR code replace a trusted key.
+     * Wipes all sessions and history, and closes their connections. The app
+     * calls this when it leaves the foreground. Pins are kept on purpose: a
+     * wiped pin would let a new QR code replace a trusted key.
      */
     @Throws(FacadeException::class)override fun `wipeAll`()
         = 
@@ -2089,6 +2245,18 @@ sealed class FacadeException(message: String): kotlin.Exception(message) {
      */
         class DuplicatePin(message: String) : FacadeException(message)
         
+    /**
+     * Connecting needs the peer's identity from a scanned QR code first.
+     */
+        class NotPinned(message: String) : FacadeException(message)
+        
+    /**
+     * The session exists but no network connection is open for it.
+     */
+        class NoLink(message: String) : FacadeException(message)
+        
+        class Network(message: String) : FacadeException(message)
+        
         class Internal(message: String) : FacadeException(message)
         
 
@@ -2109,7 +2277,10 @@ public object FfiConverterTypeFacadeError : FfiConverterRustBuffer<FacadeExcepti
             3 -> FacadeException.NoSession(FfiConverterString.read(buf))
             4 -> FacadeException.PinChanged(FfiConverterString.read(buf))
             5 -> FacadeException.DuplicatePin(FfiConverterString.read(buf))
-            6 -> FacadeException.Internal(FfiConverterString.read(buf))
+            6 -> FacadeException.NotPinned(FfiConverterString.read(buf))
+            7 -> FacadeException.NoLink(FfiConverterString.read(buf))
+            8 -> FacadeException.Network(FfiConverterString.read(buf))
+            9 -> FacadeException.Internal(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
         
@@ -2141,8 +2312,20 @@ public object FfiConverterTypeFacadeError : FfiConverterRustBuffer<FacadeExcepti
                 buf.putInt(5)
                 Unit
             }
-            is FacadeException.Internal -> {
+            is FacadeException.NotPinned -> {
                 buf.putInt(6)
+                Unit
+            }
+            is FacadeException.NoLink -> {
+                buf.putInt(7)
+                Unit
+            }
+            is FacadeException.Network -> {
+                buf.putInt(8)
+                Unit
+            }
+            is FacadeException.Internal -> {
+                buf.putInt(9)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }

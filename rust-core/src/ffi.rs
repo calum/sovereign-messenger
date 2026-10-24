@@ -2,18 +2,26 @@
 //! plaintext history stay in Rust. Kotlin gets public identity bytes, handshake
 //! bytes, sealed wire bytes, and plaintext strings for display. It never gets a
 //! private key, a chain key or a message key. Errors carry no content.
+//!
+//! Lock order: a session's send or receive lock may be held while taking the
+//! state lock, never the reverse. A receive blocked on the socket holds only its
+//! session's receive lock, so it cannot stall a send.
 
 use std::collections::HashMap;
+use std::net::TcpListener;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use zeroize::Zeroize;
 
 use crate::error::CoreError;
-use crate::handshake::{self, HandshakeInit, Identity, IdentityPublic};
+use crate::handshake::{self, Identity, IdentityPublic};
 use crate::pairing;
 use crate::ratchet::{Chain, Message};
 use crate::secret::{Key32, SecretBytes};
 use crate::store::Store;
+use crate::transport::{TcpTransport, Transport};
+use crate::wire::{self, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
 
 /// Public identity, safe to show in a QR code. Holds no secret material.
 #[derive(Clone, Debug, uniffi::Record)]
@@ -70,6 +78,14 @@ pub enum FacadeError {
     /// The same identity was scanned again for an already-pinned peer.
     #[error("identity already pinned")]
     DuplicatePin,
+    /// Connecting needs the peer's identity from a scanned QR code first.
+    #[error("no pinned identity for this peer")]
+    NotPinned,
+    /// The session exists but no network connection is open for it.
+    #[error("no open connection to this peer")]
+    NoLink,
+    #[error("network error")]
+    Network,
     #[error("internal state unavailable")]
     Internal,
 }
@@ -81,26 +97,26 @@ impl From<CoreError> for FacadeError {
             CoreError::Auth | CoreError::BadSignature => FacadeError::AuthFailed,
             CoreError::PinMismatch => FacadeError::PinChanged,
             CoreError::DuplicatePin => FacadeError::DuplicatePin,
+            CoreError::Network => FacadeError::Network,
             CoreError::Lock => FacadeError::Internal,
         }
     }
 }
 
-/// Directional labels. Both peers derive the same two chains from the root;
-/// the initiator sends on "i->r" and the responder sends on "r->i", so a
-/// message can never be reflected back to its sender.
-const INITIATOR_TO_RESPONDER: &[u8] = b"i->r";
-const RESPONDER_TO_INITIATOR: &[u8] = b"r->i";
+/// How long `connect_peer` waits for the TCP connection to open.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct Session {
-    send: Chain,
-    recv: Chain,
+    send: Mutex<Chain>,
+    recv: Mutex<Chain>,
+    /// `None` for an in-process session with no network connection.
+    link: Option<Arc<dyn Transport>>,
 }
 
 struct State {
     identity: Identity,
     public: IdentityPublic,
-    sessions: HashMap<String, Session>,
+    sessions: HashMap<String, Arc<Session>>,
     /// Trust-on-first-use pins, keyed by the caller's peer label. RAM only.
     /// Survives `forget` and `wipe_all` so a later QR cannot replace a key.
     pins: HashMap<String, IdentityPublic>,
@@ -207,16 +223,15 @@ impl Messenger {
         let peer = to_core_public(peer)?;
         let (init, root) = handshake::initiate(&peer)?;
         let mut st = self.lock()?;
-        match st.pins.get(&peer_id) {
-            Some(pinned) if *pinned != peer => return Err(FacadeError::PinChanged),
-            Some(_) => {}
-            None => {
-                st.pins.insert(peer_id.clone(), peer);
-            }
-        }
+        pin_or_check(&mut st, &peer_id, &peer)?;
         st.sessions.insert(
             peer_id,
-            session_for(&root, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR),
+            Arc::new(session_for(
+                &root,
+                INITIATOR_TO_RESPONDER,
+                RESPONDER_TO_INITIATOR,
+                None,
+            )),
         );
         Ok(HandshakeMessage {
             ephemeral_x25519: init.ephemeral_x25519.to_vec(),
@@ -230,7 +245,7 @@ impl Messenger {
         peer_id: String,
         init: HandshakeMessage,
     ) -> Result<(), FacadeError> {
-        let init = HandshakeInit {
+        let init = handshake::HandshakeInit {
             ephemeral_x25519: to_array32(&init.ephemeral_x25519)?,
             mlkem_ct: init.mlkem_ct,
         };
@@ -238,44 +253,125 @@ impl Messenger {
         let root = handshake::respond(&st.identity, &init)?;
         st.sessions.insert(
             peer_id,
-            session_for(&root, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER),
+            Arc::new(session_for(
+                &root,
+                RESPONDER_TO_INITIATOR,
+                INITIATOR_TO_RESPONDER,
+                None,
+            )),
         );
         Ok(())
     }
 
-    /// Seals the text for the peer and records it locally. The returned wire
-    /// message is what a transport would carry (no transport exists yet).
+    /// Seals the text for the peer and records it locally, without a network send.
+    /// `send_over_transport` is the path that transmits.
     pub fn send(&self, peer_id: String, text: String) -> Result<WireMessage, FacadeError> {
-        let mut guard = self.lock()?;
-        let st = &mut *guard;
-        let session = st
-            .sessions
-            .get_mut(&peer_id)
-            .ok_or(FacadeError::NoSession)?;
-        let sealed = session.send.seal(text.as_bytes())?;
-        st.store.push(&peer_id, text.as_bytes());
+        let session = self.session(&peer_id)?;
+        let sealed = lock_chain(&session.send)?.seal(text.as_bytes())?;
+        self.lock()?.store.push(&peer_id, text.as_bytes());
         Ok(WireMessage {
             counter: sealed.counter,
             ciphertext: sealed.ciphertext,
         })
     }
 
-    /// Opens a message from the peer. A tampered, replayed or out-of-order
-    /// message is rejected and leaves the chain where it was.
+    /// Opens a message from the peer without a network receive. A tampered,
+    /// replayed or out-of-order message is rejected and leaves the chain where it was.
     pub fn receive(&self, peer_id: String, msg: WireMessage) -> Result<(), FacadeError> {
-        let mut guard = self.lock()?;
-        let st = &mut *guard;
-        let session = st
-            .sessions
-            .get_mut(&peer_id)
-            .ok_or(FacadeError::NoSession)?;
-        let mut plaintext = session.recv.open(&Message {
+        let session = self.session(&peer_id)?;
+        let mut plaintext = lock_chain(&session.recv)?.open(&Message {
             counter: msg.counter,
             ciphertext: msg.ciphertext,
         })?;
-        st.store.push(&peer_id, &plaintext);
+        self.lock()?.store.push(&peer_id, &plaintext);
         plaintext.zeroize();
         Ok(())
+    }
+
+    /// Dials `addr` (for example `192.168.1.20:47001`) and runs the handshake
+    /// with the identity pinned for `peer_id`. The socket stays open for the session.
+    pub fn connect_peer(&self, peer_id: String, addr: String) -> Result<(), FacadeError> {
+        let peer = self
+            .lock()?
+            .pins
+            .get(&peer_id)
+            .cloned()
+            .ok_or(FacadeError::NotPinned)?;
+        let (init, root) = handshake::initiate(&peer)?;
+        let link: Arc<dyn Transport> = Arc::new(
+            TcpTransport::connect(&addr, CONNECT_TIMEOUT).map_err(|_| FacadeError::Network)?,
+        );
+        wire::send_handshake(link.as_ref(), &init)?;
+        let session = session_for(
+            &root,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+            Some(link),
+        );
+        self.lock()?.sessions.insert(peer_id, Arc::new(session));
+        Ok(())
+    }
+
+    /// Binds `bind_addr` and waits up to `timeout_secs` for one peer to connect.
+    /// Blocks the calling thread; the app runs it off the UI thread.
+    pub fn listen_for_peer(
+        &self,
+        peer_id: String,
+        bind_addr: String,
+        timeout_secs: u32,
+    ) -> Result<(), FacadeError> {
+        let listener = TcpListener::bind(&bind_addr).map_err(|_| FacadeError::Network)?;
+        let link: Arc<dyn Transport> = Arc::new(
+            TcpTransport::accept(&listener, Duration::from_secs(u64::from(timeout_secs)))
+                .map_err(|_| FacadeError::Network)?,
+        );
+        drop(listener); // one peer per listen call
+        let init = wire::receive_handshake(link.as_ref())?;
+        let root = {
+            let st = self.lock()?;
+            handshake::respond(&st.identity, &init)?
+        };
+        let session = session_for(
+            &root,
+            RESPONDER_TO_INITIATOR,
+            INITIATOR_TO_RESPONDER,
+            Some(link),
+        );
+        self.lock()?.sessions.insert(peer_id, Arc::new(session));
+        Ok(())
+    }
+
+    /// Seals `text` and sends it over the peer's open connection. Records it
+    /// locally only after the frame has been handed to the socket.
+    pub fn send_over_transport(&self, peer_id: String, text: String) -> Result<(), FacadeError> {
+        let session = self.session(&peer_id)?;
+        let link = session.link.clone().ok_or(FacadeError::NoLink)?;
+        {
+            let mut chain = lock_chain(&session.send)?;
+            wire::send_message(link.as_ref(), &mut chain, text.as_bytes())?;
+        }
+        self.lock()?.store.push(&peer_id, text.as_bytes());
+        Ok(())
+    }
+
+    /// Waits for one message from the peer over its open connection. Returns
+    /// `Ok(false)` if nothing arrived within the poll interval, so the caller can
+    /// stop its loop; `Ok(true)` when a message was opened and stored.
+    pub fn receive_from_peer(&self, peer_id: String) -> Result<bool, FacadeError> {
+        let session = self.session(&peer_id)?;
+        let link = session.link.clone().ok_or(FacadeError::NoLink)?;
+        let polled = {
+            let mut chain = lock_chain(&session.recv)?;
+            wire::poll_message(link.as_ref(), &mut chain)?
+        };
+        match polled {
+            None => Ok(false),
+            Some(mut plaintext) => {
+                self.lock()?.store.push(&peer_id, &plaintext);
+                plaintext.zeroize();
+                Ok(true)
+            }
+        }
     }
 
     /// Plaintext history for display, oldest first. Each string is a copy that
@@ -306,8 +402,9 @@ impl Messenger {
         Ok(())
     }
 
-    /// Wipes all sessions and history. The app calls this when it leaves the foreground.
-    /// Pins are kept on purpose: a wiped pin would let a new QR code replace a trusted key.
+    /// Wipes all sessions and history, and closes their connections. The app
+    /// calls this when it leaves the foreground. Pins are kept on purpose: a
+    /// wiped pin would let a new QR code replace a trusted key.
     pub fn wipe_all(&self) -> Result<(), FacadeError> {
         let mut st = self.lock()?;
         st.store.wipe_all();
@@ -335,12 +432,42 @@ impl Messenger {
         // rather than read half-updated ratchet state.
         self.state.lock().map_err(|_| FacadeError::Internal)
     }
+
+    fn session(&self, peer_id: &str) -> Result<Arc<Session>, FacadeError> {
+        self.lock()?
+            .sessions
+            .get(peer_id)
+            .cloned()
+            .ok_or(FacadeError::NoSession)
+    }
 }
 
-fn session_for(root: &Key32, send_label: &[u8], recv_label: &[u8]) -> Session {
+/// Pins `peer` under `peer_id` on first use; refuses a different key for a pinned peer.
+fn pin_or_check(st: &mut State, peer_id: &str, peer: &IdentityPublic) -> Result<(), FacadeError> {
+    match st.pins.get(peer_id) {
+        Some(pinned) if pinned != peer => Err(FacadeError::PinChanged),
+        Some(_) => Ok(()),
+        None => {
+            st.pins.insert(peer_id.to_owned(), peer.clone());
+            Ok(())
+        }
+    }
+}
+
+fn lock_chain(chain: &Mutex<Chain>) -> Result<MutexGuard<'_, Chain>, FacadeError> {
+    chain.lock().map_err(|_| FacadeError::Internal)
+}
+
+fn session_for(
+    root: &Key32,
+    send_label: &[u8],
+    recv_label: &[u8],
+    link: Option<Arc<dyn Transport>>,
+) -> Session {
     Session {
-        send: Chain::new(root, send_label),
-        recv: Chain::new(root, recv_label),
+        send: Mutex::new(Chain::new(root, send_label)),
+        recv: Mutex::new(Chain::new(root, recv_label)),
+        link,
     }
 }
 

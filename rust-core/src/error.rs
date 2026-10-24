@@ -14,4 +14,6 @@ pub enum CoreError {
     DuplicatePin,
     #[error("memory lock failed")]
     Lock,
+    #[error("network error")]
+    Network,
 }

@@ -1,6 +1,5 @@
 package org.sovereign.mesh.core
 
-import uniffi.rust_core.FacadeException
 import uniffi.rust_core.LockReport
 import uniffi.rust_core.Messenger
 
@@ -9,22 +8,34 @@ import uniffi.rust_core.Messenger
  * identity keys, ratchet state and plaintext history. This class forwards calls
  * and caches nothing: no key or message is copied into a Kotlin field.
  *
- * `send` does not transmit yet. The wire message it seals is discarded because
- * there is no transport (PLAN section 3); the message is still recorded locally.
+ * Network I/O runs in rust-core, which owns the TCP socket and the framing. The
+ * calls that block (`connect`, `listen`, `receiveOnce`) must run off the UI
+ * thread. Errors are thrown as [FacadeException]; they carry no message content.
  */
-class CoreBridge {
-    private val messenger = Messenger()
+class CoreBridge(private val messenger: Messenger = Messenger()) {
 
     fun peers(): List<String> = messenger.peers()
 
-    /** Returns false when there is no session with [peer] yet, so the UI can say so. */
-    fun send(peer: String, text: String): Boolean =
-        try {
-            messenger.send(peer, text)
-            true
-        } catch (e: FacadeException.NoSession) {
-            false
-        }
+    /** Seals [text] and sends it over the open connection to [peer]. Blocking. */
+    fun send(peer: String, text: String) {
+        messenger.sendOverTransport(peer, text)
+    }
+
+    /** Dials [addr] (`host:port`) and runs the handshake with the pinned identity of [peer]. Blocking. */
+    fun connect(peer: String, addr: String) {
+        messenger.connectPeer(peer, addr)
+    }
+
+    /** Waits up to [timeoutSecs] for [peer] to dial [bindAddr]. Blocking; no cancel yet. */
+    fun listen(peer: String, bindAddr: String, timeoutSecs: Int) {
+        messenger.listenForPeer(peer, bindAddr, timeoutSecs.toUInt())
+    }
+
+    /**
+     * Waits briefly for one message from [peer]. Returns false if none arrived in
+     * the poll interval, so the caller can loop. Blocking.
+     */
+    fun receiveOnce(peer: String): Boolean = messenger.receiveFromPeer(peer)
 
     fun history(peer: String): List<String> = messenger.history(peer)
 

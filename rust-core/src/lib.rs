@@ -8,7 +8,9 @@ pub mod pairing;
 pub mod ratchet;
 pub mod secret;
 pub mod store;
+pub mod transport;
 pub mod update;
+pub mod wire;
 
 pub use error::CoreError;
 

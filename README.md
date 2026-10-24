@@ -4,7 +4,7 @@
 
 An experimental peer-to-peer messenger for a small, closed group of up to five people, built for Android. The goal is a messenger with no servers, no cloud, no disk storage of messages, and post-quantum key exchange, wrapped in an interface that looks like an ordinary chat app.
 
-Right now this is a working core library, a passing test suite, and an Android app shell. **Messages are not yet sent over the network.** See [PLAN.md](PLAN.md) for what is done and what is left.
+Right now this is a working core library, a passing test suite, and an Android app shell. The core can carry a handshake and chat messages over TCP on a local network, and the chat screen can connect or wait for a contact. **That path is tested only between two objects on one machine (loopback). It has not been run between two phones.** Tor is not implemented. See [PLAN.md](PLAN.md) for what is done and what is left.
 
 ## What works today
 
@@ -15,13 +15,16 @@ Right now this is a working core library, a passing test suite, and an Android a
   - Ed25519 verification of update payloads against a pinned developer key,
   - a RAM-only chat store with no persistence API.
   - a UniFFI facade (`ffi.rs`) that exposes a `Messenger` object; keys and plaintext stay in Rust.
-  Pairing (QR payload built in Rust, TOFU pin, refused changed key) is covered by 20 unit, 12 pairing integration and 7 round-trip integration tests. The `mise` tasks are the source of truth for running them.
-- **`app/`**: an Android (Kotlin, Jetpack Compose) shell with a three-card tour, a chat list, a chat screen with a RAM-retention countdown, `FLAG_SECURE` on every window, and backups disabled in the manifest. `CoreBridge` calls the generated UniFFI bindings for `rust-core` (arm64-v8a and x86_64 libraries are built by `rust-core/scripts/build-android.sh`). Twelve JVM tests run the real core through JNA, including a QR encode and decode round trip.
+  - a framed transport trait with a TCP implementation (64 KiB frame cap, refused oversize and truncated frames).
+  Pairing (QR payload built in Rust, TOFU pin, refused changed key) is covered by 12 pairing integration tests. Transport and the handshake and ratchet over it are covered by 8 transport, 3 session and 5 facade integration tests; there are also 26 unit and 7 round-trip integration tests. The `mise` tasks are the source of truth for running them.
+- **`app/`**: an Android (Kotlin, Jetpack Compose) shell with a three-card tour, a chat list, a chat screen with a RAM-retention countdown, `FLAG_SECURE` on every window, and backups disabled in the manifest. `CoreBridge` calls the generated UniFFI bindings for `rust-core` (arm64-v8a and x86_64 libraries are built by `rust-core/scripts/build-android.sh`). Twenty JVM tests run the real core through JNA, including a QR encode and decode round trip and a loopback message over TCP. One of them (the QR round trip) has failed intermittently in our runs; see PLAN.md.
 
 ## What does not work yet
 
-- No network transport. Tor onion services are not implemented. Messages are recorded locally but are not sent to another phone.
-- Pairing pins a scanned identity, but no session can start from the UI until the transport exists. The camera scanner has not been run on a device, and the native library has not been run on a device or emulator.
+- The TCP transport has not been run between two phones. A contact's address is typed in by hand; the QR code does not carry one.
+- Tor onion services are not implemented (see PLAN.md, Decisions, Tor ruling).
+- The handshake does not authenticate the connecting side. Anyone who has a phone's QR code can open a session on its listener under the label it chose (PLAN.md, Decisions).
+- The camera scanner has not been run on a device, and the native library has not been run on a device or emulator.
 - No APK transfer between phones, no signed-update delivery. The ephemeral handshake key is not in the QR code yet (see PLAN section 2).
 - The ratchet has no Diffie-Hellman step, so it has no post-compromise recovery.
 - Nothing here has been independently reviewed. The cryptography uses third-party crates (`ml-kem`, `x25519-dalek`, `ed25519-dalek`, `chacha20poly1305`, `hkdf`) that have not been audited as part of this project.

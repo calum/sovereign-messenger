@@ -11,24 +11,27 @@ COMPONENTS
   - store.rs      RAM-only chat store, no persistence API
   - error.rs      CoreError (no secret content in messages)
   - ffi.rs        UniFFI facade: Messenger object, the only surface Kotlin calls
+  - transport.rs  Transport trait; TcpTransport (length-prefixed frames, 64 KiB cap)
+  - wire.rs       handshake and ratchet frame layout; send and receive helpers
   - scripts/      build-android.sh (NDK cross-compile), gen-kotlin.sh (bindings)
 - app/           Android app, Kotlin + Jetpack Compose, minSdk 29, targetSdk 35, package org.sovereign.mesh
   - MainActivity: FLAG_SECURE, wipes core on stop
-  - core/CoreBridge: forwards to generated UniFFI bindings (uniffi/rust_core); no transport yet
-  - ui/: TourScreen, ChatListScreen, ChatScreen
+  - core/CoreBridge: forwards to generated UniFFI bindings (uniffi/rust_core); connect, listen, send, receive over TCP
+  - ui/: TourScreen, ChatListScreen, ChatScreen (connect or wait for contact, send, receive loop)
 
 WORKS TODAY
-- 18 Rust tests pass (mise run rust:test)
+- 61 Rust tests pass (mise run rust:test): 26 unit, 12 pairing, 7 round trip, 8 transport, 3 session over TCP, 5 facade over TCP
 - clippy -D warnings and fmt clean (mise run rust:lint)
 - debug APK builds with libuniffi_rust_core.so for arm64-v8a and x86_64
-- 5 JVM tests pass through JNA (mise run android:test)
+- 20 JVM tests pass through JNA (mise run android:test), including a loopback message over TCP. The QR round trip test has failed intermittently; see PLAN.md
 
 NOT DONE
-- network transport (Tor v3 onion services): not started
-- running the native library on a device or emulator: not done
-- QR onboarding, APK transfer between phones, signed-update delivery: not started
+- Tor v3 onion services: not implemented (ruling in PLAN.md Decisions)
+- TCP transport between two phones: not run; loopback only
+- running the native library or the chat screen on a device or emulator: not done
+- handshake authentication of the initiator: not done (PLAN.md Decisions)
+- QR onboarding camera scan on a device, APK transfer between phones, signed-update delivery: not verified or not started
 - ratchet DH step (post-compromise security): not started
-- app does not send or receive messages yet
 
 CONSTRAINTS FOR CHANGES
 - never write message/key data to disk
