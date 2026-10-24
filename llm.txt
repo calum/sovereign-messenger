@@ -1,6 +1,7 @@
 PROJECT: Sovereign Mesh (sovereign-messenger)
 STATUS: experimental, not audited, not for sensitive use yet.
 PURPOSE: P2P messenger for a closed group (up to 5 people) on Android. No servers, no cloud, no disk storage of messages. Post-quantum key exchange.
+EXPERIMENT: tests whether a fully AI-generated P2P messenger can be made private and secure. None of the code is human-written. Humans test it, and their results decide what is working.
 
 COMPONENTS
 - rust-core/  Rust library (crate: rust-core)
