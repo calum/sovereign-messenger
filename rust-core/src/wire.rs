@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::double_ratchet::{header_bytes, header_from_bytes, DoubleRatchet, Message, HEADER_LEN};
 use crate::error::CoreError;
-use crate::handshake::HandshakeInit;
+use crate::handshake::{HandshakeInit, CHALLENGE_LEN};
 use crate::transport::{Transport, TransportError};
 
 /// Direction labels. Both peers derive the same two chains from the root; the
@@ -22,12 +22,17 @@ pub const RESPONDER_TO_INITIATOR: &[u8] = b"r->i";
 
 pub const TAG_HANDSHAKE: u8 = 0x01;
 pub const TAG_MESSAGE: u8 = 0x02;
+/// The responder's challenge, sent before the initiator speaks. A handshake
+/// built with an old challenge fails its confirmation tag, so a replay is refused.
+pub const TAG_CHALLENGE: u8 = 0x03;
 
 /// ML-KEM-768 ciphertext length in bytes (FIPS 203). Checked in tests against the library.
 pub const MLKEM768_CT_LEN: usize = 1088;
 const EPHEMERAL_LEN: usize = 32;
 const STATIC_LEN: usize = 32;
-const HANDSHAKE_LEN: usize = 1 + EPHEMERAL_LEN + STATIC_LEN + MLKEM768_CT_LEN;
+const TAG_LEN: usize = 32;
+const HANDSHAKE_LEN: usize = 1 + EPHEMERAL_LEN + STATIC_LEN + MLKEM768_CT_LEN + TAG_LEN;
+const CHALLENGE_FRAME_LEN: usize = 1 + CHALLENGE_LEN;
 /// Tag, then the ratchet header, then the ciphertext. A ChaCha20-Poly1305
 /// ciphertext is at least the 16-byte tag.
 const MESSAGE_MIN_LEN: usize = 1 + HEADER_LEN + 16;
@@ -35,12 +40,14 @@ const MESSAGE_MIN_LEN: usize = 1 + HEADER_LEN + 16;
 /// How long a receive helper waits for a frame before giving up.
 const RECEIVE_DEADLINE: Duration = Duration::from_secs(10);
 
+/// Layout: `[tag 0x01][ephemeral 32][initiator static 32][ML-KEM ct 1088][confirmation tag 32]`.
 pub fn encode_handshake(init: &HandshakeInit) -> Vec<u8> {
     let mut out = Vec::with_capacity(HANDSHAKE_LEN);
     out.push(TAG_HANDSHAKE);
     out.extend_from_slice(&init.ephemeral_x25519);
     out.extend_from_slice(&init.initiator_x25519);
     out.extend_from_slice(&init.mlkem_ct);
+    out.extend_from_slice(&init.tag);
     out
 }
 
@@ -49,15 +56,50 @@ pub fn decode_handshake(frame: &[u8]) -> Result<HandshakeInit, CoreError> {
         return Err(CoreError::Malformed);
     }
     let static_at = 1 + EPHEMERAL_LEN;
+    let kem_at = static_at + STATIC_LEN;
+    let confirm_at = kem_at + MLKEM768_CT_LEN;
     let mut ephemeral_x25519 = [0u8; EPHEMERAL_LEN];
     ephemeral_x25519.copy_from_slice(&frame[1..static_at]);
     let mut initiator_x25519 = [0u8; STATIC_LEN];
-    initiator_x25519.copy_from_slice(&frame[static_at..static_at + STATIC_LEN]);
+    initiator_x25519.copy_from_slice(&frame[static_at..kem_at]);
+    let mut tag = [0u8; TAG_LEN];
+    tag.copy_from_slice(&frame[confirm_at..]);
     Ok(HandshakeInit {
         ephemeral_x25519,
         initiator_x25519,
-        mlkem_ct: frame[static_at + STATIC_LEN..].to_vec(),
+        mlkem_ct: frame[kem_at..confirm_at].to_vec(),
+        tag,
     })
+}
+
+/// Layout: `[tag 0x03][challenge 32]`. Only the responder sends it.
+pub fn encode_challenge(challenge: &[u8; CHALLENGE_LEN]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(CHALLENGE_FRAME_LEN);
+    out.push(TAG_CHALLENGE);
+    out.extend_from_slice(challenge);
+    out
+}
+
+/// A challenge frame of any other length or tag is refused as `Malformed`.
+pub fn decode_challenge(frame: &[u8]) -> Result<[u8; CHALLENGE_LEN], CoreError> {
+    if frame.len() != CHALLENGE_FRAME_LEN || frame[0] != TAG_CHALLENGE {
+        return Err(CoreError::Malformed);
+    }
+    let mut challenge = [0u8; CHALLENGE_LEN];
+    challenge.copy_from_slice(&frame[1..]);
+    Ok(challenge)
+}
+
+pub fn send_challenge(
+    link: &dyn Transport,
+    challenge: &[u8; CHALLENGE_LEN],
+) -> Result<(), CoreError> {
+    link.send(&encode_challenge(challenge))
+        .map_err(map_transport)
+}
+
+pub fn receive_challenge(link: &dyn Transport) -> Result<[u8; CHALLENGE_LEN], CoreError> {
+    decode_challenge(&next_frame(link)?)
 }
 
 pub fn encode_message(msg: &Message) -> Vec<u8> {
@@ -152,7 +194,7 @@ mod tests {
     #[test]
     fn handshake_frame_round_trips() {
         let (me, public) = Identity::generate();
-        let (init, _root) = initiate(&me, &public).unwrap();
+        let (init, _root) = initiate(&me, &public, &[9u8; 32]).unwrap();
         let frame = encode_handshake(&init);
         let back = decode_handshake(&frame).unwrap();
         assert_eq!(back.ephemeral_x25519, init.ephemeral_x25519);
@@ -163,7 +205,7 @@ mod tests {
     #[test]
     fn handshake_frame_with_wrong_length_is_refused() {
         let (me, public) = Identity::generate();
-        let (init, _root) = initiate(&me, &public).unwrap();
+        let (init, _root) = initiate(&me, &public, &[9u8; 32]).unwrap();
         let mut frame = encode_handshake(&init);
         frame.pop();
         assert!(matches!(
@@ -181,11 +223,51 @@ mod tests {
     #[test]
     fn frame_with_wrong_tag_is_refused() {
         let (me, public) = Identity::generate();
-        let (init, _root) = initiate(&me, &public).unwrap();
+        let (init, _root) = initiate(&me, &public, &[9u8; 32]).unwrap();
         let mut frame = encode_handshake(&init);
         frame[0] = TAG_MESSAGE;
         assert!(matches!(
             decode_handshake(&frame),
+            Err(CoreError::Malformed)
+        ));
+    }
+
+    #[test]
+    fn handshake_frame_carries_the_confirmation_tag() {
+        let (me, public) = Identity::generate();
+        let (init, _root) = initiate(&me, &public, &[9u8; 32]).unwrap();
+        let back = decode_handshake(&encode_handshake(&init)).unwrap();
+        assert_eq!(back.tag, init.tag);
+    }
+
+    #[test]
+    fn challenge_frame_round_trips() {
+        let nonce = [4u8; CHALLENGE_LEN];
+        assert_eq!(decode_challenge(&encode_challenge(&nonce)).unwrap(), nonce);
+    }
+
+    #[test]
+    fn challenge_frame_with_wrong_length_is_refused() {
+        let mut frame = encode_challenge(&[4u8; CHALLENGE_LEN]);
+        frame.pop();
+        assert!(matches!(
+            decode_challenge(&frame),
+            Err(CoreError::Malformed)
+        ));
+        frame.push(0);
+        frame.push(0);
+        assert!(matches!(
+            decode_challenge(&frame),
+            Err(CoreError::Malformed)
+        ));
+    }
+
+    #[test]
+    fn challenge_frame_with_wrong_tag_is_refused() {
+        let mut frame = encode_challenge(&[4u8; CHALLENGE_LEN]);
+        frame[0] = TAG_HANDSHAKE;
+        assert!(matches!(
+            decode_challenge(&frame),
             Err(CoreError::Malformed)
         ));
     }
@@ -220,7 +302,7 @@ mod tests {
     #[test]
     fn mlkem_ciphertext_length_matches_the_library() {
         let (me, public) = Identity::generate();
-        let (init, _root) = initiate(&me, &public).unwrap();
+        let (init, _root) = initiate(&me, &public, &[9u8; 32]).unwrap();
         assert_eq!(init.mlkem_ct.len(), MLKEM768_CT_LEN);
     }
 }

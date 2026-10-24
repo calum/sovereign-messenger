@@ -713,6 +713,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_receive_update(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_responder_challenge(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_scan_pairing(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_send(
@@ -763,7 +765,7 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_rust_core_fn_constructor_messenger_new(uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-    external fun uniffi_rust_core_fn_method_messenger_accept_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`init`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_rust_core_fn_method_messenger_accept_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`init`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_connect_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,`addr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -801,13 +803,15 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_rust_core_fn_method_messenger_receive_update(`ptr`: Long,`bindAddr`: RustBuffer.ByValue,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_responder_challenge(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_scan_pairing(`ptr`: Long,`peerId`: RustBuffer.ByValue,`payload`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_send(`ptr`: Long,`peerId`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_send_over_transport(`ptr`: Long,`peerId`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_rust_core_fn_method_messenger_start_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`peer`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_rust_core_fn_method_messenger_start_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`peer`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_unpin(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -946,7 +950,7 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if ((lib.uniffi_rust_core_checksum_method_messenger_accept_session() and 0xFFFF) != 36325) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_accept_session() and 0xFFFF) != 9393) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_connect_peer() and 0xFFFF) != 47327) {
@@ -1003,6 +1007,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_receive_update() and 0xFFFF) != 44392) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_responder_challenge() and 0xFFFF) != 21568) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_method_messenger_scan_pairing() and 0xFFFF) != 38189) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1012,7 +1019,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_send_over_transport() and 0xFFFF) != 17166) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_rust_core_checksum_method_messenger_start_session() and 0xFFFF) != 3175) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_start_session() and 0xFFFF) != 24895) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_unpin() and 0xFFFF) != 28018) {
@@ -1471,10 +1478,13 @@ public interface MessengerInterface {
     
     /**
      * Responder side: derive the same root from the initiator's handshake message.
-     * Refuses with `NotPinned` if `peer_id` has no pin, and with `AuthFailed` if the
-     * initiator's static key is not the pinned one.
+     * `challenge` must be the one `responder_challenge` issued, and it is spent by
+     * this call whatever the outcome. Refuses with `NotPinned` if `peer_id` has no
+     * pin, and with `AuthFailed` if the initiator's static key is not the pinned one,
+     * if the challenge is not the pending one, or if the confirmation tag does not
+     * verify. No session is stored on any refusal, so a replay leaves a live session alone.
      */
-    fun `acceptSession`(`peerId`: kotlin.String, `init`: HandshakeMessage)
+    fun `acceptSession`(`peerId`: kotlin.String, `init`: HandshakeMessage, `challenge`: kotlin.ByteArray)
     
     /**
      * Dials `addr` (for example `192.168.1.20:47001`) and runs the handshake
@@ -1576,6 +1586,13 @@ public interface MessengerInterface {
     fun `receiveUpdate`(`bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt): VerifiedUpdate
     
     /**
+     * Responder side, first step: issues a fresh challenge and remembers it as the
+     * one the next `accept_session` must answer. The caller sends these bytes to the
+     * initiator, who passes them to `start_session`. A new call replaces the old challenge.
+     */
+    fun `responderChallenge`(): kotlin.ByteArray
+    
+    /**
      * Pins the identity in a scanned QR code for `peer_id` (trust on first use).
      * Refuses a malformed payload, a different key for a pinned peer
      * (`PinChanged`), and a second scan of the same key (`DuplicatePin`).
@@ -1595,10 +1612,11 @@ public interface MessengerInterface {
     fun `sendOverTransport`(`peerId`: kotlin.String, `text`: kotlin.String)
     
     /**
-     * Initiator side: encapsulate to the peer's identity and open a session.
-     * Pins the identity on first use; refuses a different key for a pinned peer.
+     * Initiator side: encapsulate to the peer's identity and open a session, bound to
+     * the responder's `challenge`. Pins the identity on first use; refuses a different
+     * key for a pinned peer.
      */
-    fun `startSession`(`peerId`: kotlin.String, `peer`: PublicIdentity): HandshakeMessage
+    fun `startSession`(`peerId`: kotlin.String, `peer`: PublicIdentity, `challenge`: kotlin.ByteArray): HandshakeMessage
     
     /**
      * The user has checked the new key in person and accepts it. Drops the pin
@@ -1740,10 +1758,13 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     
     /**
      * Responder side: derive the same root from the initiator's handshake message.
-     * Refuses with `NotPinned` if `peer_id` has no pin, and with `AuthFailed` if the
-     * initiator's static key is not the pinned one.
+     * `challenge` must be the one `responder_challenge` issued, and it is spent by
+     * this call whatever the outcome. Refuses with `NotPinned` if `peer_id` has no
+     * pin, and with `AuthFailed` if the initiator's static key is not the pinned one,
+     * if the challenge is not the pending one, or if the confirmation tag does not
+     * verify. No session is stored on any refusal, so a replay leaves a live session alone.
      */
-    @Throws(FacadeException::class)override fun `acceptSession`(`peerId`: kotlin.String, `init`: HandshakeMessage)
+    @Throws(FacadeException::class)override fun `acceptSession`(`peerId`: kotlin.String, `init`: HandshakeMessage, `challenge`: kotlin.ByteArray)
         = 
     callWithHandle {
     uniffiRustCallWithError(FacadeException) { _status ->
@@ -1751,7 +1772,8 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
         it,
         
         FfiConverterString.lower(`peerId`),
-        FfiConverterTypeHandshakeMessage.lower(`init`),_status)
+        FfiConverterTypeHandshakeMessage.lower(`init`),
+        FfiConverterByteArray.lower(`challenge`),_status)
 }
     }
     
@@ -2084,6 +2106,25 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
+     * Responder side, first step: issues a fresh challenge and remembers it as the
+     * one the next `accept_session` must answer. The caller sends these bytes to the
+     * initiator, who passes them to `start_session`. A new call replaces the old challenge.
+     */
+    @Throws(FacadeException::class)override fun `responderChallenge`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_responder_challenge(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Pins the identity in a scanned QR code for `peer_id` (trust on first use).
      * Refuses a malformed payload, a different key for a pinned peer
      * (`PinChanged`), and a second scan of the same key (`DuplicatePin`).
@@ -2144,10 +2185,11 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
-     * Initiator side: encapsulate to the peer's identity and open a session.
-     * Pins the identity on first use; refuses a different key for a pinned peer.
+     * Initiator side: encapsulate to the peer's identity and open a session, bound to
+     * the responder's `challenge`. Pins the identity on first use; refuses a different
+     * key for a pinned peer.
      */
-    @Throws(FacadeException::class)override fun `startSession`(`peerId`: kotlin.String, `peer`: PublicIdentity): HandshakeMessage {
+    @Throws(FacadeException::class)override fun `startSession`(`peerId`: kotlin.String, `peer`: PublicIdentity, `challenge`: kotlin.ByteArray): HandshakeMessage {
             return FfiConverterTypeHandshakeMessage.lift(
     callWithHandle {
     uniffiRustCallWithError(FacadeException) { _status ->
@@ -2155,7 +2197,8 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
         it,
         
         FfiConverterString.lower(`peerId`),
-        FfiConverterTypePublicIdentity.lower(`peer`),_status)
+        FfiConverterTypePublicIdentity.lower(`peer`),
+        FfiConverterByteArray.lower(`challenge`),_status)
 }
     }
     )
@@ -2594,6 +2637,11 @@ data class HandshakeMessage (
     var `initiatorX25519`: kotlin.ByteArray
     , 
     var `mlkemCt`: kotlin.ByteArray
+    , 
+    /**
+     * Key-confirmation tag over the responder's challenge (32 bytes). Public.
+     */
+    var `tag`: kotlin.ByteArray
     
 ){
     
@@ -2613,19 +2661,22 @@ public object FfiConverterTypeHandshakeMessage: FfiConverterRustBuffer<Handshake
             FfiConverterByteArray.read(buf),
             FfiConverterByteArray.read(buf),
             FfiConverterByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
         )
     }
 
     override fun allocationSize(value: HandshakeMessage) = (
             FfiConverterByteArray.allocationSize(value.`ephemeralX25519`) +
             FfiConverterByteArray.allocationSize(value.`initiatorX25519`) +
-            FfiConverterByteArray.allocationSize(value.`mlkemCt`)
+            FfiConverterByteArray.allocationSize(value.`mlkemCt`) +
+            FfiConverterByteArray.allocationSize(value.`tag`)
     )
 
     override fun write(value: HandshakeMessage, buf: ByteBuffer) {
             FfiConverterByteArray.write(value.`ephemeralX25519`, buf)
             FfiConverterByteArray.write(value.`initiatorX25519`, buf)
             FfiConverterByteArray.write(value.`mlkemCt`, buf)
+            FfiConverterByteArray.write(value.`tag`, buf)
     }
 }
 

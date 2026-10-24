@@ -13,14 +13,17 @@ use rust_core::CoreError;
 const EPHEMERAL_AT: usize = 1;
 const STATIC_AT: usize = 1 + 32;
 const KEM_AT: usize = 1 + 32 + 32;
+/// A fixed challenge for the core-level tests here, which check authentication,
+/// not freshness. Freshness is tested in `handshake_replay.rs`.
+const CH: [u8; 32] = [7u8; 32];
 
 #[test]
 fn pinned_initiator_and_responder_derive_the_same_root_and_exchange_a_message() {
     let (bob, bob_pub) = Identity::generate();
     let (alice, alice_pub) = Identity::generate();
 
-    let (init, root_a) = handshake::initiate(&alice, &bob_pub).unwrap();
-    let root_b = handshake::respond(&bob, &alice_pub.x25519, &init).unwrap();
+    let (init, root_a) = handshake::initiate(&alice, &bob_pub, &CH).unwrap();
+    let root_b = handshake::respond(&bob, &alice_pub.x25519, &init, &CH).unwrap();
     assert_eq!(root_a.0, root_b.0);
 
     let mut send = DoubleRatchet::new(&root_a, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
@@ -35,9 +38,9 @@ fn responder_refuses_an_initiator_whose_static_key_is_not_the_pinned_one() {
     let (_alice, alice_pub) = Identity::generate();
     let (mallory, _) = Identity::generate();
 
-    let (init, _) = handshake::initiate(&mallory, &bob_pub).unwrap();
+    let (init, _) = handshake::initiate(&mallory, &bob_pub, &CH).unwrap();
     assert_eq!(
-        handshake::respond(&bob, &alice_pub.x25519, &init).err(),
+        handshake::respond(&bob, &alice_pub.x25519, &init, &CH).err(),
         Some(CoreError::Auth)
     );
 }
@@ -48,14 +51,13 @@ fn responder_with_a_wrong_static_key_cannot_complete_with_the_real_initiator() {
     let (alice, alice_pub) = Identity::generate();
     let (impostor_bob, _) = Identity::generate();
 
-    let (init, root_a) = handshake::initiate(&alice, &bob_pub).unwrap();
-    let root_b = handshake::respond(&impostor_bob, &alice_pub.x25519, &init).unwrap();
-    assert_ne!(root_a.0, root_b.0);
-
-    let mut send = DoubleRatchet::new(&root_a, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
-    let mut recv = DoubleRatchet::new(&root_b, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
-    let msg = send.seal(b"for bob only").unwrap();
-    assert_eq!(recv.open(&msg), Err(CoreError::Auth));
+    let (init, _root_a) = handshake::initiate(&alice, &bob_pub, &CH).unwrap();
+    // The impostor derives a different root, so the confirmation tag fails and it
+    // never gets a root to open a session with.
+    assert_eq!(
+        handshake::respond(&impostor_bob, &alice_pub.x25519, &init, &CH).err(),
+        Some(CoreError::Auth)
+    );
 }
 
 #[test]
@@ -63,62 +65,58 @@ fn tampered_static_key_is_refused_by_the_pin() {
     let (bob, bob_pub) = Identity::generate();
     let (alice, alice_pub) = Identity::generate();
 
-    let (init, _) = handshake::initiate(&alice, &bob_pub).unwrap();
+    let (init, _) = handshake::initiate(&alice, &bob_pub, &CH).unwrap();
     let mut frame = wire::encode_handshake(&init);
     frame[STATIC_AT] ^= 0x01;
     let tampered = wire::decode_handshake(&frame).unwrap();
 
     assert_eq!(
-        handshake::respond(&bob, &alice_pub.x25519, &tampered).err(),
+        handshake::respond(&bob, &alice_pub.x25519, &tampered, &CH).err(),
         Some(CoreError::Auth)
     );
 }
 
 #[test]
-fn tampered_ephemeral_key_gives_a_root_that_does_not_open_the_first_message() {
+fn tampered_ephemeral_key_is_refused_by_the_confirmation_tag() {
     let (bob, bob_pub) = Identity::generate();
     let (alice, alice_pub) = Identity::generate();
 
-    let (init, root_a) = handshake::initiate(&alice, &bob_pub).unwrap();
+    let (init, _) = handshake::initiate(&alice, &bob_pub, &CH).unwrap();
     let mut frame = wire::encode_handshake(&init);
     frame[EPHEMERAL_AT] ^= 0x01;
     let tampered = wire::decode_handshake(&frame).unwrap();
-    let root_b = handshake::respond(&bob, &alice_pub.x25519, &tampered).unwrap();
-    assert_ne!(root_a.0, root_b.0);
-
-    let mut send = DoubleRatchet::new(&root_a, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
-    let mut recv = DoubleRatchet::new(&root_b, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
-    let msg = send.seal(b"hello").unwrap();
-    assert_eq!(recv.open(&msg), Err(CoreError::Auth));
+    // The tag was computed over the genuine ephemeral key, so no root is returned.
+    assert_eq!(
+        handshake::respond(&bob, &alice_pub.x25519, &tampered, &CH).err(),
+        Some(CoreError::Auth)
+    );
 }
 
 #[test]
-fn tampered_kem_ciphertext_gives_a_root_that_does_not_open_the_first_message() {
+fn tampered_kem_ciphertext_is_refused_by_the_confirmation_tag() {
     let (bob, bob_pub) = Identity::generate();
     let (alice, alice_pub) = Identity::generate();
 
-    let (init, root_a) = handshake::initiate(&alice, &bob_pub).unwrap();
+    let (init, _) = handshake::initiate(&alice, &bob_pub, &CH).unwrap();
     let mut frame = wire::encode_handshake(&init);
     frame[KEM_AT + 10] ^= 0x01;
     let tampered = wire::decode_handshake(&frame).unwrap();
-    let root_b = handshake::respond(&bob, &alice_pub.x25519, &tampered).unwrap();
-    assert_ne!(root_a.0, root_b.0);
-
-    let mut send = DoubleRatchet::new(&root_a, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
-    let mut recv = DoubleRatchet::new(&root_b, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
-    let msg = send.seal(b"hello").unwrap();
-    assert_eq!(recv.open(&msg), Err(CoreError::Auth));
+    assert_eq!(
+        handshake::respond(&bob, &alice_pub.x25519, &tampered, &CH).err(),
+        Some(CoreError::Auth)
+    );
 }
 
 #[test]
 fn facade_responder_refuses_a_peer_with_no_pin() {
     let alice = Messenger::new();
     let bob = Messenger::new();
+    let c = bob.responder_challenge().unwrap();
     let init = alice
-        .start_session("bob".into(), bob.own_identity().unwrap())
+        .start_session("bob".into(), bob.own_identity().unwrap(), c.clone())
         .unwrap();
     assert_eq!(
-        bob.accept_session("alice".into(), init),
+        bob.accept_session("alice".into(), init, c),
         Err(FacadeError::NotPinned)
     );
 }
@@ -134,11 +132,12 @@ fn facade_responder_refuses_a_handshake_from_a_key_other_than_the_pinned_one() {
     )
     .unwrap();
 
+    let c = bob.responder_challenge().unwrap();
     let init = mallory
-        .start_session("bob".into(), bob.own_identity().unwrap())
+        .start_session("bob".into(), bob.own_identity().unwrap(), c.clone())
         .unwrap();
     assert_eq!(
-        bob.accept_session("alice".into(), init),
+        bob.accept_session("alice".into(), init, c),
         Err(FacadeError::AuthFailed)
     );
     assert_eq!(bob.peers().unwrap(), Vec::<String>::new());
@@ -154,10 +153,11 @@ fn facade_pinned_initiator_opens_a_session_and_messages_flow() {
     )
     .unwrap();
 
+    let c = bob.responder_challenge().unwrap();
     let init = alice
-        .start_session("bob".into(), bob.own_identity().unwrap())
+        .start_session("bob".into(), bob.own_identity().unwrap(), c.clone())
         .unwrap();
-    bob.accept_session("alice".into(), init).unwrap();
+    bob.accept_session("alice".into(), init, c).unwrap();
 
     bob.receive(
         "alice".into(),

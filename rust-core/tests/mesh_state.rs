@@ -34,7 +34,7 @@ fn in_process_session_is_listed_but_not_linked() {
     let bob = Messenger::new();
     alice.scan_pairing("bob".into(), scan_of(&bob)).unwrap();
     alice
-        .start_session("bob".into(), bob.own_identity().unwrap())
+        .start_session("bob".into(), bob.own_identity().unwrap(), vec![0u8; 32])
         .unwrap();
 
     // A session with no socket is not a connection to the contact.

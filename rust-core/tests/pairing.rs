@@ -32,10 +32,11 @@ fn handshake_works_after_scan() {
     alice.scan_pairing("bob".into(), scan_of(&bob)).unwrap();
     bob.scan_pairing("alice".into(), scan_of(&alice)).unwrap();
 
+    let c = bob.responder_challenge().unwrap();
     let init = alice
-        .start_session("bob".into(), bob.own_identity().unwrap())
+        .start_session("bob".into(), bob.own_identity().unwrap(), c.clone())
         .unwrap();
-    bob.accept_session("alice".into(), init).unwrap();
+    bob.accept_session("alice".into(), init, c).unwrap();
     let m = alice.send("bob".into(), "paired".into()).unwrap();
     bob.receive("alice".into(), m).unwrap();
     assert_eq!(
@@ -71,7 +72,7 @@ fn handshake_with_changed_key_is_refused_and_opens_no_session() {
 
     assert_eq!(
         alice
-            .start_session("bob".into(), mallory.own_identity().unwrap())
+            .start_session("bob".into(), mallory.own_identity().unwrap(), vec![0u8; 32])
             .map(|_| ()),
         Err(FacadeError::PinChanged)
     );
@@ -159,7 +160,7 @@ fn start_session_without_a_scan_pins_on_first_use() {
     let bob = Messenger::new();
     let mallory = Messenger::new();
     alice
-        .start_session("bob".into(), bob.own_identity().unwrap())
+        .start_session("bob".into(), bob.own_identity().unwrap(), vec![0u8; 32])
         .unwrap();
     assert_eq!(
         alice.pin_fingerprint("bob".into()).unwrap(),
@@ -167,7 +168,7 @@ fn start_session_without_a_scan_pins_on_first_use() {
     );
     assert_eq!(
         alice
-            .start_session("bob".into(), mallory.own_identity().unwrap())
+            .start_session("bob".into(), mallory.own_identity().unwrap(), vec![0u8; 32])
             .map(|_| ()),
         Err(FacadeError::PinChanged)
     );

@@ -17,7 +17,7 @@ use zeroize::Zeroize;
 use crate::apk_transfer;
 use crate::double_ratchet::{DoubleRatchet, Header, Message};
 use crate::error::CoreError;
-use crate::handshake::{self, Identity, IdentityPublic};
+use crate::handshake::{self, Identity, IdentityPublic, CHALLENGE_LEN};
 use crate::pairing;
 use crate::secret::{Key32, SecretBytes};
 use crate::store::Store;
@@ -39,6 +39,8 @@ pub struct HandshakeMessage {
     /// The initiator's long-term X25519 public key. The responder checks it against its pin.
     pub initiator_x25519: Vec<u8>,
     pub mlkem_ct: Vec<u8>,
+    /// Key-confirmation tag over the responder's challenge (32 bytes). Public.
+    pub tag: Vec<u8>,
 }
 
 /// A peer whose identity was just pinned from a scanned QR code.
@@ -141,6 +143,9 @@ struct State {
     /// The peer a `listen_for_peer` call is waiting for, set only while it runs.
     /// Lets the UI show that a listener is up without a second source of truth.
     listening: Option<String>,
+    /// The challenge last issued by `responder_challenge`. Spent by the next
+    /// `accept_session`, whatever its outcome, so it cannot authenticate a second handshake.
+    pending_challenge: Option<[u8; CHALLENGE_LEN]>,
 }
 
 /// Collects the scanned QR parts of one pairing. Holds only public bytes.
@@ -199,6 +204,7 @@ impl Messenger {
                 pins: HashMap::new(),
                 store: Store::new(),
                 listening: None,
+                pending_challenge: None,
             }),
         })
     }
@@ -278,16 +284,28 @@ impl Messenger {
         Ok(())
     }
 
-    /// Initiator side: encapsulate to the peer's identity and open a session.
-    /// Pins the identity on first use; refuses a different key for a pinned peer.
+    /// Responder side, first step: issues a fresh challenge and remembers it as the
+    /// one the next `accept_session` must answer. The caller sends these bytes to the
+    /// initiator, who passes them to `start_session`. A new call replaces the old challenge.
+    pub fn responder_challenge(&self) -> Result<Vec<u8>, FacadeError> {
+        let challenge = handshake::new_challenge();
+        self.lock()?.pending_challenge = Some(challenge);
+        Ok(challenge.to_vec())
+    }
+
+    /// Initiator side: encapsulate to the peer's identity and open a session, bound to
+    /// the responder's `challenge`. Pins the identity on first use; refuses a different
+    /// key for a pinned peer.
     pub fn start_session(
         &self,
         peer_id: String,
         peer: PublicIdentity,
+        challenge: Vec<u8>,
     ) -> Result<HandshakeMessage, FacadeError> {
         let peer = to_core_public(peer)?;
+        let challenge = to_array32(&challenge)?;
         let mut st = self.lock()?;
-        let (init, root) = handshake::initiate(&st.identity, &peer)?;
+        let (init, root) = handshake::initiate(&st.identity, &peer, &challenge)?;
         pin_or_check(&mut st, &peer_id, &peer)?;
         st.sessions.insert(
             peer_id,
@@ -302,25 +320,36 @@ impl Messenger {
             ephemeral_x25519: init.ephemeral_x25519.to_vec(),
             initiator_x25519: init.initiator_x25519.to_vec(),
             mlkem_ct: init.mlkem_ct,
+            tag: init.tag.to_vec(),
         })
     }
 
     /// Responder side: derive the same root from the initiator's handshake message.
-    /// Refuses with `NotPinned` if `peer_id` has no pin, and with `AuthFailed` if the
-    /// initiator's static key is not the pinned one.
+    /// `challenge` must be the one `responder_challenge` issued, and it is spent by
+    /// this call whatever the outcome. Refuses with `NotPinned` if `peer_id` has no
+    /// pin, and with `AuthFailed` if the initiator's static key is not the pinned one,
+    /// if the challenge is not the pending one, or if the confirmation tag does not
+    /// verify. No session is stored on any refusal, so a replay leaves a live session alone.
     pub fn accept_session(
         &self,
         peer_id: String,
         init: HandshakeMessage,
+        challenge: Vec<u8>,
     ) -> Result<(), FacadeError> {
+        let challenge = to_array32(&challenge)?;
         let init = handshake::HandshakeInit {
             ephemeral_x25519: to_array32(&init.ephemeral_x25519)?,
             initiator_x25519: to_array32(&init.initiator_x25519)?,
             mlkem_ct: init.mlkem_ct,
+            tag: to_array32(&init.tag)?,
         };
         let mut st = self.lock()?;
         let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
-        let root = handshake::respond(&st.identity, &pinned, &init)?;
+        let issued = st.pending_challenge.take().ok_or(FacadeError::AuthFailed)?;
+        if issued != challenge {
+            return Err(FacadeError::AuthFailed);
+        }
+        let root = handshake::respond(&st.identity, &pinned, &init, &issued)?;
         st.sessions.insert(
             peer_id,
             Arc::new(session_for(
@@ -363,14 +392,21 @@ impl Messenger {
     /// Dials `addr` (for example `192.168.1.20:47001`) and runs the handshake
     /// with the identity pinned for `peer_id`. The socket stays open for the session.
     pub fn connect_peer(&self, peer_id: String, addr: String) -> Result<(), FacadeError> {
-        let (init, root) = {
-            let st = self.lock()?;
-            let peer = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
-            handshake::initiate(&st.identity, peer)?
-        };
+        // Refuse before dialing: an unpinned peer cannot be authenticated.
+        self.lock()?
+            .pins
+            .get(&peer_id)
+            .ok_or(FacadeError::NotPinned)?;
         let link: Arc<dyn Transport> = Arc::new(
             TcpTransport::connect(&addr, CONNECT_TIMEOUT).map_err(|_| FacadeError::Network)?,
         );
+        // The responder speaks first with its challenge; the handshake is built on it.
+        let challenge = wire::receive_challenge(link.as_ref())?;
+        let (init, root) = {
+            let st = self.lock()?;
+            let peer = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
+            handshake::initiate(&st.identity, peer, &challenge)?
+        };
         wire::send_handshake(link.as_ref(), &init)?;
         let session = session_for(
             &root,
@@ -566,10 +602,15 @@ impl Messenger {
                 .map_err(|_| FacadeError::Network)?,
         );
         drop(listener); // one peer per listen call
+                        // A fresh challenge per connection, sent before the initiator's handshake.
+                        // The handshake must answer this one, so a captured handshake from an earlier
+                        // connection fails its tag here and the live session is not replaced.
+        let challenge = handshake::new_challenge();
+        wire::send_challenge(link.as_ref(), &challenge)?;
         let init = wire::receive_handshake(link.as_ref())?;
         let mut st = self.lock()?;
         let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
-        let root = handshake::respond(&st.identity, &pinned, &init)?;
+        let root = handshake::respond(&st.identity, &pinned, &init, &challenge)?;
         let session = session_for(
             &root,
             RESPONDER_TO_INITIATOR,
