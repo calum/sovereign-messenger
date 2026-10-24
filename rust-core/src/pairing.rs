@@ -3,6 +3,12 @@
 //! builds and parses the bytes; Kotlin only renders them. Parsing is strict
 //! (exact length, magic, version) so a malformed or truncated code is refused
 //! before any key is pinned.
+//!
+//! The payload is sent as two QR codes (`split`, `Assembler`, `reassemble`). Each
+//! part is a 10-byte header (index, count `2`, 8-byte payload id) and about half
+//! the payload. The id is an integrity check that stops parts from different or
+//! tampered payloads being joined; it is not authentication. The fingerprint
+//! compared in person is still the trust step.
 
 use sha2::{Digest, Sha256};
 
@@ -79,7 +85,9 @@ pub fn fingerprint(public: &IdentityPublic) -> String {
 /// Decisions, 2026-10-24, QR decode). Two codes of about 0.6 KB decode reliably.
 pub const PART_COUNT: u8 = 2;
 
-/// Part header: index (1 byte), count (1 byte), payload id (8 bytes). The chunk follows.
+/// Part header: index (1 byte), count (1 byte), payload id (8 bytes), 10 bytes in all.
+/// The chunk follows. The id is the first 8 bytes of SHA-256 over `PART_ID_DOMAIN`
+/// (`sovereign-p2p v1 pairing part id`) and the whole payload.
 pub const PART_HEADER_LEN: usize = 2 + ID_LEN;
 const ID_LEN: usize = 8;
 const PART_ID_DOMAIN: &[u8] = b"sovereign-p2p v1 pairing part id";

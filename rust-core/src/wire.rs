@@ -1,7 +1,22 @@
-//! Frame layout for handshake and ratchet messages, and helpers that move them
-//! over a `Transport`. Each frame starts with a one-byte tag, so a handshake
-//! frame can never be parsed as a chat message. A ratchet frame carries a version
-//! byte inside its authenticated header, so a future layout is refused, not misread.
+//! Frame layout for the challenge, handshake and ratchet messages, and helpers
+//! that move them over a `Transport`. Each frame starts with a one-byte tag, so a
+//! handshake frame can never be parsed as a chat message. A ratchet frame carries
+//! a version byte inside its authenticated header, so a future layout is refused,
+//! not misread.
+//!
+//! Frames, all lengths checked on decode (exact length, or minimum for messages):
+//!
+//! | tag  | frame      | layout                                                        | length        |
+//! |------|------------|---------------------------------------------------------------|---------------|
+//! | 0x03 | challenge  | tag, challenge (32)                                           | 33 bytes      |
+//! | 0x01 | handshake  | tag, ephemeral X25519 (32), initiator static X25519 (32), ML-KEM-768 ciphertext (1088), confirmation tag (32) | 1185 bytes |
+//! | 0x02 | message    | tag, ratchet header (49), ciphertext (at least 16)            | at least 66 bytes |
+//!
+//! The ratchet header is version (1 byte, `0x01`), ratchet public key (32), previous
+//! chain length (u64 BE), counter (u64 BE). It is authenticated as AEAD associated data.
+//!
+//! The responder sends the challenge first, once per connection. The handshake carries
+//! a confirmation tag over the challenge, so a handshake captured earlier fails.
 //!
 //! Security property: nothing here decides authenticity. A malformed frame is
 //! refused by length or tag; a forged or altered chat message is refused by the
@@ -31,10 +46,12 @@ pub const MLKEM768_CT_LEN: usize = 1088;
 const EPHEMERAL_LEN: usize = 32;
 const STATIC_LEN: usize = 32;
 const TAG_LEN: usize = 32;
+/// Tag, ephemeral key, initiator static key, ML-KEM ciphertext, confirmation tag: 1185 bytes.
 const HANDSHAKE_LEN: usize = 1 + EPHEMERAL_LEN + STATIC_LEN + MLKEM768_CT_LEN + TAG_LEN;
+/// Tag, then the 32-byte challenge: 33 bytes.
 const CHALLENGE_FRAME_LEN: usize = 1 + CHALLENGE_LEN;
-/// Tag, then the ratchet header, then the ciphertext. A ChaCha20-Poly1305
-/// ciphertext is at least the 16-byte tag.
+/// Tag, then the ratchet header (49 bytes), then the ciphertext. A ChaCha20-Poly1305
+/// ciphertext is at least the 16-byte tag, so a message frame is at least 66 bytes.
 const MESSAGE_MIN_LEN: usize = 1 + HEADER_LEN + 16;
 
 /// How long a receive helper waits for a frame before giving up.
@@ -102,6 +119,7 @@ pub fn receive_challenge(link: &dyn Transport) -> Result<[u8; CHALLENGE_LEN], Co
     decode_challenge(&next_frame(link)?)
 }
 
+/// Layout: `[tag 0x02][ratchet header 49][ciphertext]`.
 pub fn encode_message(msg: &Message) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + HEADER_LEN + msg.ciphertext.len());
     out.push(TAG_MESSAGE);

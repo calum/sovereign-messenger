@@ -2,15 +2,20 @@
 //! receiver's update port; the receiver checks the signature and version (see
 //! `update.rs`) before the bytes are offered for install.
 //!
-//! Wire format v2, in order:
+//! Wire format v2, in order. The header is 77 bytes (1 + 8 + 64 + 4), then the APK:
 //!
 //! | field          | size        | meaning                                        |
 //! |----------------|-------------|------------------------------------------------|
 //! | frame version  | 1 byte      | `0x02`. Any other value is refused.            |
 //! | version        | 8 bytes     | update version, u64 big-endian. Signed.        |
-//! | signature      | 64 bytes    | detached Ed25519 over `signed_message(version, apk)` |
-//! | APK length     | 4 bytes     | u32 big-endian                                 |
-//! | APK            | length bytes|                                                |
+//! | signature      | 64 bytes    | detached Ed25519 over the signed message below |
+//! | APK length     | 4 bytes     | u32 big-endian. Refused if 0 or over `MAX_APK_LEN` |
+//! | APK            | length bytes| the update package                             |
+//!
+//! The signed message is the ASCII label `sovereign-p2p update v2`, then the
+//! version as u64 big-endian, then the APK bytes. It is built by
+//! `update::signed_message`. The APK length is not signed; the signature covers
+//! the APK bytes, and a wrong length fails the body read or the signature check.
 //!
 //! Security property: the announced length is checked against `MAX_APK_LEN`
 //! before any buffer is reserved or any body is read, so a peer cannot make the
