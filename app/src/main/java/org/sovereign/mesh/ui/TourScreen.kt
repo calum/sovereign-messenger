@@ -19,12 +19,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-private data class TourCard(val title: String, val body: String)
+internal data class TourCard(val title: String, val body: String)
 
-private val cards = listOf(
+internal val tourCards = listOf(
     TourCard(
         "Serverless P2P",
-        "No servers, no cloud. Your phone talks directly to your friends' phones over Tor onion services.",
+        "No servers, no cloud. Your phone connects directly to your friends' phones on the same local network. Anonymous routing is not implemented.",
     ),
     TourCard(
         "RAM-only memory",
@@ -39,7 +39,7 @@ private val cards = listOf(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TourScreen(onFinished: () -> Unit) {
-    val pagerState = rememberPagerState(pageCount = { cards.size })
+    val pagerState = rememberPagerState(pageCount = { tourCards.size })
     val scope = rememberCoroutineScope()
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
@@ -49,9 +49,9 @@ fun TourScreen(onFinished: () -> Unit) {
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(cards[page].title, style = MaterialTheme.typography.headlineMedium)
+                Text(tourCards[page].title, style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    cards[page].body,
+                    tourCards[page].body,
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.padding(top = 16.dp),
                 )
@@ -63,8 +63,8 @@ fun TourScreen(onFinished: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("${pagerState.currentPage + 1} / ${cards.size}")
-            if (pagerState.currentPage < cards.lastIndex) {
+            Text("${pagerState.currentPage + 1} / ${tourCards.size}")
+            if (pagerState.currentPage < tourCards.lastIndex) {
                 Button(onClick = { scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) } }) {
                     Text("Next")
                 }

@@ -58,6 +58,8 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         // Chats are RAM-only. Leaving the app wipes them from the core.
-        SovereignApp.core.wipeAll()
+        if (shouldWipeOnStop(isChangingConfigurations)) {
+            SovereignApp.core.wipeAll()
+        }
     }
 }

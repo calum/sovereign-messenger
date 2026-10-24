@@ -27,7 +27,7 @@ fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: (
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Secured P2P Mesh", style = MaterialTheme.typography.titleLarge)
+            Text(chatListTitle, style = MaterialTheme.typography.titleLarge)
         }
         P2pMeshIndicator(peer = null, modifier = Modifier.padding(top = 4.dp))
         Button(onClick = onPair, modifier = Modifier.padding(top = 8.dp)) {
@@ -58,3 +58,6 @@ fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: (
         }
     }
 }
+
+/** The chat list title. It must not say "secured" until the app can back that claim (CLAUDE.md rule 7). */
+internal const val chatListTitle = "P2P Mesh"
