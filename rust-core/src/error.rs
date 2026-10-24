@@ -8,6 +8,10 @@ pub enum CoreError {
     Auth,
     #[error("signature rejected")]
     BadSignature,
+    /// The signature is valid but the version is not strictly newer than the installed one.
+    /// The message names no key or version content.
+    #[error("update is not newer than the installed version")]
+    Downgrade,
     #[error("key pin mismatch")]
     PinMismatch,
     #[error("identity already pinned")]

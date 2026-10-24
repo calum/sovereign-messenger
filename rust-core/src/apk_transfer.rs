@@ -1,15 +1,23 @@
 //! Peer-to-peer APK transfer over the local network. The sender dials the
-//! receiver's update port; the receiver checks the signature (see `update.rs`)
-//! before the bytes are offered for install.
+//! receiver's update port; the receiver checks the signature and version (see
+//! `update.rs`) before the bytes are offered for install.
 //!
-//! Wire format, in order: a 64-byte detached Ed25519 signature, a 4-byte
-//! big-endian APK length, then the APK bytes. Nothing else is sent.
+//! Wire format v2, in order:
+//!
+//! | field          | size        | meaning                                        |
+//! |----------------|-------------|------------------------------------------------|
+//! | frame version  | 1 byte      | `0x02`. Any other value is refused.            |
+//! | version        | 8 bytes     | update version, u64 big-endian. Signed.        |
+//! | signature      | 64 bytes    | detached Ed25519 over `signed_message(version, apk)` |
+//! | APK length     | 4 bytes     | u32 big-endian                                 |
+//! | APK            | length bytes|                                                |
 //!
 //! Security property: the announced length is checked against `MAX_APK_LEN`
 //! before any buffer is reserved or any body is read, so a peer cannot make the
-//! receiver allocate more than the cap. The transfer layer does not trust the
-//! bytes; the signature check decides whether they may be installed. This module
-//! never writes to disk.
+//! receiver allocate more than the cap. The version is part of the signed
+//! message, so a version edited in transit fails the signature check. The
+//! transfer layer does not trust the bytes; the signature check decides whether
+//! they may be installed. This module never writes to disk.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -27,6 +35,14 @@ pub const MAX_APK_LEN: usize = 64 * 1024 * 1024;
 /// Length of an Ed25519 signature.
 pub const SIGNATURE_LEN: usize = 64;
 
+/// Version of the transfer frame. The first byte of every frame. A frame in the
+/// old layout (no version field) starts with a signature byte, so it is refused
+/// here rather than misread as a v2 frame.
+pub const FRAME_VERSION: u8 = 0x02;
+
+/// Bytes before the APK: frame version, update version, signature, APK length.
+const HEADER_LEN: usize = 1 + 8 + SIGNATURE_LEN + 4;
+
 /// A 64 MiB APK over a slow Wi-Fi link can take a minute or more, so the sender
 /// allows a long write before giving up.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -37,6 +53,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(120);
 /// Writes one update. Refuses an empty or oversize APK before writing anything.
 pub fn write_update<W: Write>(
     w: &mut W,
+    version: u64,
     signature: &[u8; SIGNATURE_LEN],
     apk: &[u8],
 ) -> Result<(), CoreError> {
@@ -44,21 +61,33 @@ pub fn write_update<W: Write>(
     if apk.is_empty() || apk.len() > MAX_APK_LEN {
         return Err(CoreError::Malformed);
     }
-    let mut head = [0u8; SIGNATURE_LEN + 4];
-    head[..SIGNATURE_LEN].copy_from_slice(signature);
-    head[SIGNATURE_LEN..].copy_from_slice(&(apk.len() as u32).to_be_bytes());
+    let mut head = [0u8; HEADER_LEN];
+    head[0] = FRAME_VERSION;
+    head[1..9].copy_from_slice(&version.to_be_bytes());
+    head[9..9 + SIGNATURE_LEN].copy_from_slice(signature);
+    head[HEADER_LEN - 4..].copy_from_slice(&(apk.len() as u32).to_be_bytes());
     w.write_all(&head).map_err(|_| CoreError::Network)?;
     w.write_all(apk).map_err(|_| CoreError::Network)?;
     w.flush().map_err(|_| CoreError::Network)
 }
 
-/// Reads one update into `apk`, replacing its contents, and returns the signature.
-/// The announced length is checked against `MAX_APK_LEN` and before `apk` grows.
+/// Reads one update into `apk`, replacing its contents, and returns the announced
+/// version and the signature. The frame version and the announced length are
+/// checked before `apk` grows.
 pub fn read_update<R: Read>(
     r: &mut R,
     apk: &mut Vec<u8>,
-) -> Result<[u8; SIGNATURE_LEN], CoreError> {
+) -> Result<(u64, [u8; SIGNATURE_LEN]), CoreError> {
     apk.clear();
+    let mut frame_version = [0u8; 1];
+    r.read_exact(&mut frame_version)
+        .map_err(|_| CoreError::Network)?;
+    if frame_version[0] != FRAME_VERSION {
+        return Err(CoreError::Malformed);
+    }
+    let mut version_bytes = [0u8; 8];
+    r.read_exact(&mut version_bytes)
+        .map_err(|_| CoreError::Network)?;
     let mut signature = [0u8; SIGNATURE_LEN];
     r.read_exact(&mut signature)
         .map_err(|_| CoreError::Network)?;
@@ -73,13 +102,14 @@ pub fn read_update<R: Read>(
     apk.try_reserve_exact(len).map_err(|_| CoreError::Network)?;
     apk.resize(len, 0);
     r.read_exact(apk).map_err(|_| CoreError::Network)?;
-    Ok(signature)
+    Ok((u64::from_be_bytes(version_bytes), signature))
 }
 
 /// Sender side: dials `addr` and sends one update.
 pub fn send_update_to(
     addr: &str,
     timeout: Duration,
+    version: u64,
     signature: &[u8; SIGNATURE_LEN],
     apk: &[u8],
 ) -> Result<(), CoreError> {
@@ -93,7 +123,7 @@ pub fn send_update_to(
     stream
         .set_write_timeout(Some(WRITE_TIMEOUT))
         .map_err(|_| CoreError::Network)?;
-    write_update(&mut stream, signature, apk)
+    write_update(&mut stream, version, signature, apk)
 }
 
 /// Receiver side: binds `bind_addr`, waits up to `timeout` for one sender, and reads one update.
@@ -101,7 +131,7 @@ pub fn receive_update_on(
     bind_addr: &str,
     timeout: Duration,
     apk: &mut Vec<u8>,
-) -> Result<[u8; SIGNATURE_LEN], CoreError> {
+) -> Result<(u64, [u8; SIGNATURE_LEN]), CoreError> {
     let listener = TcpListener::bind(bind_addr).map_err(|_| CoreError::Network)?;
     listener
         .set_nonblocking(true)
@@ -137,9 +167,12 @@ mod tests {
     use std::io::Cursor;
 
     const SIG: [u8; SIGNATURE_LEN] = [7u8; SIGNATURE_LEN];
+    const VERSION: u64 = 9;
 
     fn header(len: u32) -> Vec<u8> {
-        let mut v = SIG.to_vec();
+        let mut v = vec![FRAME_VERSION];
+        v.extend_from_slice(&VERSION.to_be_bytes());
+        v.extend_from_slice(&SIG);
         v.extend_from_slice(&len.to_be_bytes());
         v
     }
@@ -152,12 +185,13 @@ mod tests {
         let sent = apk.clone();
         let sender = std::thread::spawn(move || {
             let mut stream = TcpStream::connect(&addr).unwrap();
-            write_update(&mut stream, &SIG, &sent).unwrap();
+            write_update(&mut stream, VERSION, &SIG, &sent).unwrap();
         });
         let (mut stream, _) = listener.accept().unwrap();
         let mut got = Vec::new();
-        let sig = read_update(&mut stream, &mut got).unwrap();
+        let (version, sig) = read_update(&mut stream, &mut got).unwrap();
         sender.join().unwrap();
+        assert_eq!(version, VERSION);
         assert_eq!(sig, SIG);
         assert_eq!(got, apk);
     }
@@ -176,7 +210,7 @@ mod tests {
         let sender = std::thread::spawn(move || {
             // The receiver may not be listening yet; retry briefly.
             for _ in 0..200 {
-                if send_update_to(&dial, Duration::from_secs(1), &SIG, &sent).is_ok() {
+                if send_update_to(&dial, Duration::from_secs(1), VERSION, &SIG, &sent).is_ok() {
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(10));
@@ -184,8 +218,9 @@ mod tests {
             panic!("sender never connected");
         });
         let mut got = Vec::new();
-        let sig = receive_update_on(&bind, Duration::from_secs(5), &mut got).unwrap();
+        let (version, sig) = receive_update_on(&bind, Duration::from_secs(5), &mut got).unwrap();
         sender.join().unwrap();
+        assert_eq!(version, VERSION);
         assert_eq!(sig, SIG);
         assert_eq!(got, apk);
     }
@@ -229,11 +264,24 @@ mod tests {
     }
 
     #[test]
+    fn unknown_frame_version_refused() {
+        // A frame in another layout, or any other version, is refused, not misread.
+        let mut wire = header(4);
+        wire[0] = FRAME_VERSION.wrapping_add(1);
+        wire.extend_from_slice(b"apk!");
+        let mut apk = Vec::new();
+        assert_eq!(
+            read_update(&mut Cursor::new(wire), &mut apk),
+            Err(CoreError::Malformed)
+        );
+    }
+
+    #[test]
     fn sender_refuses_oversize_apk_before_writing() {
         let big = vec![0u8; MAX_APK_LEN + 1];
         let mut wire = Vec::new();
         assert_eq!(
-            write_update(&mut wire, &SIG, &big),
+            write_update(&mut wire, VERSION, &SIG, &big),
             Err(CoreError::Malformed)
         );
         assert!(wire.is_empty(), "nothing may be written for a refused APK");

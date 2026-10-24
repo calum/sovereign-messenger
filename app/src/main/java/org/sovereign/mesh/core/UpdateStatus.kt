@@ -11,6 +11,8 @@ fun updateStatusText(error: Throwable): String =
     when (error) {
         is FacadeException.AuthFailed ->
             "The update was refused: its signature did not verify. Do not install it."
+        is FacadeException.Downgraded ->
+            "This update is not newer than the installed version. It was refused; nothing was installed."
         is FacadeException.Malformed ->
             "The update was malformed or its signature was the wrong length. It was refused."
         is FacadeException.Network ->

@@ -90,9 +90,10 @@ class CoreBridge(private val messenger: Messenger = Messenger()) {
 
     /**
      * Listens on [bindAddr] for one sender and returns the APK bytes only if their
-     * signature verifies against the compiled-in developer key. Blocking; the caller
-     * runs it off the UI thread. Throws [FacadeException] otherwise.
+     * signature verifies over the version the sender announced, and that version is
+     * strictly newer than [installedVersion] (the installed version code). Blocking;
+     * the caller runs it off the UI thread. Throws [FacadeException] otherwise.
      */
-    fun receiveUpdate(bindAddr: String, timeoutSecs: Int): ByteArray =
-        messenger.receiveUpdate(bindAddr, timeoutSecs.toUInt()).apk
+    fun receiveUpdate(bindAddr: String, timeoutSecs: Int, installedVersion: Long): ByteArray =
+        messenger.receiveUpdate(bindAddr, timeoutSecs.toUInt(), installedVersion.toULong()).apk
 }

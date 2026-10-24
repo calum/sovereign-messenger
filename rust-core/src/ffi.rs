@@ -87,6 +87,9 @@ pub enum FacadeError {
     Malformed,
     #[error("authentication failed")]
     AuthFailed,
+    /// The update is validly signed but not newer than the installed build. It is refused.
+    #[error("update is older than or the same as the installed version")]
+    Downgraded,
     #[error("no session with this peer")]
     NoSession,
     /// The peer's pinned key differs from the one offered. The new key is refused.
@@ -113,6 +116,7 @@ impl From<CoreError> for FacadeError {
         match e {
             CoreError::Malformed => FacadeError::Malformed,
             CoreError::Auth | CoreError::BadSignature => FacadeError::AuthFailed,
+            CoreError::Downgrade => FacadeError::Downgraded,
             CoreError::PinMismatch => FacadeError::PinChanged,
             CoreError::DuplicatePin => FacadeError::DuplicatePin,
             CoreError::Network => FacadeError::Network,
@@ -535,27 +539,43 @@ impl Messenger {
         update::DEVELOPER_PUBLIC_KEY.map(|key| update::developer_key_fingerprint(&key))
     }
 
-    /// Checks an APK's detached Ed25519 signature against the compiled-in developer key.
-    /// Refuses a signature that is not 64 bytes (`Malformed`) and a bad one (`AuthFailed`).
-    pub fn verify_update(&self, apk: Vec<u8>, signature: Vec<u8>) -> Result<(), FacadeError> {
-        Ok(update::verify_update(&apk, &signature)?)
+    /// Checks an APK's detached Ed25519 signature over `version` and `apk`, against the
+    /// compiled-in developer key, and refuses a `version` not newer than
+    /// `installed_version`. Refuses a signature that is not 64 bytes (`Malformed`),
+    /// a bad one (`AuthFailed`), and an equal or older version (`Downgraded`).
+    /// `installed_version` comes from the app's installed version code.
+    pub fn verify_update(
+        &self,
+        apk: Vec<u8>,
+        version: u64,
+        signature: Vec<u8>,
+        installed_version: u64,
+    ) -> Result<(), FacadeError> {
+        Ok(update::verify_update(
+            &apk,
+            version,
+            &signature,
+            installed_version,
+        )?)
     }
 
     /// Listens on `bind_addr` (the update port is 47002) for one sender, reads one
-    /// APK, and returns it only if its signature verifies. Blocks; the app runs it
-    /// off the UI thread. Nothing is written to disk here.
+    /// APK, and returns it only if its signature verifies over the version it
+    /// carries and that version is newer than `installed_version`. Blocks; the app
+    /// runs it off the UI thread. Nothing is written to disk here.
     pub fn receive_update(
         &self,
         bind_addr: String,
         timeout_secs: u32,
+        installed_version: u64,
     ) -> Result<VerifiedUpdate, FacadeError> {
         let mut apk = Vec::new();
-        let signature = apk_transfer::receive_update_on(
+        let (version, signature) = apk_transfer::receive_update_on(
             &bind_addr,
             Duration::from_secs(u64::from(timeout_secs)),
             &mut apk,
         )?;
-        update::verify_update(&apk, &signature)?;
+        update::verify_update(&apk, version, &signature, installed_version)?;
         Ok(VerifiedUpdate { apk })
     }
 
@@ -696,7 +716,7 @@ mod update_facade_tests {
         let m = Messenger::new();
         assert_eq!(m.developer_key_fingerprint(), None);
         assert_eq!(
-            m.verify_update(b"apk".to_vec(), vec![0u8; 64]),
+            m.verify_update(b"apk".to_vec(), 2, vec![0u8; 64], 1),
             Err(FacadeError::AuthFailed)
         );
     }

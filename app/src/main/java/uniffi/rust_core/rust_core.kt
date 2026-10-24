@@ -801,7 +801,7 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_receive_from_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    external fun uniffi_rust_core_fn_method_messenger_receive_update(`ptr`: Long,`bindAddr`: RustBuffer.ByValue,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_rust_core_fn_method_messenger_receive_update(`ptr`: Long,`bindAddr`: RustBuffer.ByValue,`timeoutSecs`: Int,`installedVersion`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_responder_challenge(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -815,7 +815,7 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_unpin(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_rust_core_fn_method_messenger_verify_update(`ptr`: Long,`apk`: RustBuffer.ByValue,`signature`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_rust_core_fn_method_messenger_verify_update(`ptr`: Long,`apk`: RustBuffer.ByValue,`version`: Long,`signature`: RustBuffer.ByValue,`installedVersion`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_wipe_all(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1004,7 +1004,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_receive_from_peer() and 0xFFFF) != 17368) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_rust_core_checksum_method_messenger_receive_update() and 0xFFFF) != 44392) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_receive_update() and 0xFFFF) != 59755) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_responder_challenge() and 0xFFFF) != 21568) {
@@ -1025,7 +1025,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_unpin() and 0xFFFF) != 28018) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_rust_core_checksum_method_messenger_verify_update() and 0xFFFF) != 8499) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_verify_update() and 0xFFFF) != 53274) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_wipe_all() and 0xFFFF) != 51025) {
@@ -1580,10 +1580,11 @@ public interface MessengerInterface {
     
     /**
      * Listens on `bind_addr` (the update port is 47002) for one sender, reads one
-     * APK, and returns it only if its signature verifies. Blocks; the app runs it
-     * off the UI thread. Nothing is written to disk here.
+     * APK, and returns it only if its signature verifies over the version it
+     * carries and that version is newer than `installed_version`. Blocks; the app
+     * runs it off the UI thread. Nothing is written to disk here.
      */
-    fun `receiveUpdate`(`bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt): VerifiedUpdate
+    fun `receiveUpdate`(`bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt, `installedVersion`: kotlin.ULong): VerifiedUpdate
     
     /**
      * Responder side, first step: issues a fresh challenge and remembers it as the
@@ -1625,10 +1626,13 @@ public interface MessengerInterface {
     fun `unpin`(`peerId`: kotlin.String)
     
     /**
-     * Checks an APK's detached Ed25519 signature against the compiled-in developer key.
-     * Refuses a signature that is not 64 bytes (`Malformed`) and a bad one (`AuthFailed`).
+     * Checks an APK's detached Ed25519 signature over `version` and `apk`, against the
+     * compiled-in developer key, and refuses a `version` not newer than
+     * `installed_version`. Refuses a signature that is not 64 bytes (`Malformed`),
+     * a bad one (`AuthFailed`), and an equal or older version (`Downgraded`).
+     * `installed_version` comes from the app's installed version code.
      */
-    fun `verifyUpdate`(`apk`: kotlin.ByteArray, `signature`: kotlin.ByteArray)
+    fun `verifyUpdate`(`apk`: kotlin.ByteArray, `version`: kotlin.ULong, `signature`: kotlin.ByteArray, `installedVersion`: kotlin.ULong)
     
     /**
      * Wipes all sessions and history, and closes their connections. The app
@@ -2086,10 +2090,11 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     
     /**
      * Listens on `bind_addr` (the update port is 47002) for one sender, reads one
-     * APK, and returns it only if its signature verifies. Blocks; the app runs it
-     * off the UI thread. Nothing is written to disk here.
+     * APK, and returns it only if its signature verifies over the version it
+     * carries and that version is newer than `installed_version`. Blocks; the app
+     * runs it off the UI thread. Nothing is written to disk here.
      */
-    @Throws(FacadeException::class)override fun `receiveUpdate`(`bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt): VerifiedUpdate {
+    @Throws(FacadeException::class)override fun `receiveUpdate`(`bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt, `installedVersion`: kotlin.ULong): VerifiedUpdate {
             return FfiConverterTypeVerifiedUpdate.lift(
     callWithHandle {
     uniffiRustCallWithError(FacadeException) { _status ->
@@ -2097,7 +2102,8 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
         it,
         
         FfiConverterString.lower(`bindAddr`),
-        FfiConverterUInt.lower(`timeoutSecs`),_status)
+        FfiConverterUInt.lower(`timeoutSecs`),
+        FfiConverterULong.lower(`installedVersion`),_status)
 }
     }
     )
@@ -2225,10 +2231,13 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
-     * Checks an APK's detached Ed25519 signature against the compiled-in developer key.
-     * Refuses a signature that is not 64 bytes (`Malformed`) and a bad one (`AuthFailed`).
+     * Checks an APK's detached Ed25519 signature over `version` and `apk`, against the
+     * compiled-in developer key, and refuses a `version` not newer than
+     * `installed_version`. Refuses a signature that is not 64 bytes (`Malformed`),
+     * a bad one (`AuthFailed`), and an equal or older version (`Downgraded`).
+     * `installed_version` comes from the app's installed version code.
      */
-    @Throws(FacadeException::class)override fun `verifyUpdate`(`apk`: kotlin.ByteArray, `signature`: kotlin.ByteArray)
+    @Throws(FacadeException::class)override fun `verifyUpdate`(`apk`: kotlin.ByteArray, `version`: kotlin.ULong, `signature`: kotlin.ByteArray, `installedVersion`: kotlin.ULong)
         = 
     callWithHandle {
     uniffiRustCallWithError(FacadeException) { _status ->
@@ -2236,7 +2245,9 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
         it,
         
         FfiConverterByteArray.lower(`apk`),
-        FfiConverterByteArray.lower(`signature`),_status)
+        FfiConverterULong.lower(`version`),
+        FfiConverterByteArray.lower(`signature`),
+        FfiConverterULong.lower(`installedVersion`),_status)
 }
     }
     
@@ -2924,6 +2935,11 @@ sealed class FacadeException(message: String): kotlin.Exception(message) {
         
         class AuthFailed(message: String) : FacadeException(message)
         
+    /**
+     * The update is validly signed but not newer than the installed build. It is refused.
+     */
+        class Downgraded(message: String) : FacadeException(message)
+        
         class NoSession(message: String) : FacadeException(message)
         
     /**
@@ -2966,13 +2982,14 @@ public object FfiConverterTypeFacadeError : FfiConverterRustBuffer<FacadeExcepti
             return when(buf.getInt()) {
             1 -> FacadeException.Malformed(FfiConverterString.read(buf))
             2 -> FacadeException.AuthFailed(FfiConverterString.read(buf))
-            3 -> FacadeException.NoSession(FfiConverterString.read(buf))
-            4 -> FacadeException.PinChanged(FfiConverterString.read(buf))
-            5 -> FacadeException.DuplicatePin(FfiConverterString.read(buf))
-            6 -> FacadeException.NotPinned(FfiConverterString.read(buf))
-            7 -> FacadeException.NoLink(FfiConverterString.read(buf))
-            8 -> FacadeException.Network(FfiConverterString.read(buf))
-            9 -> FacadeException.Internal(FfiConverterString.read(buf))
+            3 -> FacadeException.Downgraded(FfiConverterString.read(buf))
+            4 -> FacadeException.NoSession(FfiConverterString.read(buf))
+            5 -> FacadeException.PinChanged(FfiConverterString.read(buf))
+            6 -> FacadeException.DuplicatePin(FfiConverterString.read(buf))
+            7 -> FacadeException.NotPinned(FfiConverterString.read(buf))
+            8 -> FacadeException.NoLink(FfiConverterString.read(buf))
+            9 -> FacadeException.Network(FfiConverterString.read(buf))
+            10 -> FacadeException.Internal(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
         
@@ -2992,32 +3009,36 @@ public object FfiConverterTypeFacadeError : FfiConverterRustBuffer<FacadeExcepti
                 buf.putInt(2)
                 Unit
             }
-            is FacadeException.NoSession -> {
+            is FacadeException.Downgraded -> {
                 buf.putInt(3)
                 Unit
             }
-            is FacadeException.PinChanged -> {
+            is FacadeException.NoSession -> {
                 buf.putInt(4)
                 Unit
             }
-            is FacadeException.DuplicatePin -> {
+            is FacadeException.PinChanged -> {
                 buf.putInt(5)
                 Unit
             }
-            is FacadeException.NotPinned -> {
+            is FacadeException.DuplicatePin -> {
                 buf.putInt(6)
                 Unit
             }
-            is FacadeException.NoLink -> {
+            is FacadeException.NotPinned -> {
                 buf.putInt(7)
                 Unit
             }
-            is FacadeException.Network -> {
+            is FacadeException.NoLink -> {
                 buf.putInt(8)
                 Unit
             }
-            is FacadeException.Internal -> {
+            is FacadeException.Network -> {
                 buf.putInt(9)
+                Unit
+            }
+            is FacadeException.Internal -> {
+                buf.putInt(10)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }

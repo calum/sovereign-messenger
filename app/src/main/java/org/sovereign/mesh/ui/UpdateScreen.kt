@@ -47,7 +47,8 @@ fun UpdateScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val core = SovereignApp.core
     val scope = rememberCoroutineScope()
-    val installed = remember { UpdateInstaller.installedVersion(context) }
+    val installedName = remember { UpdateInstaller.installedVersionName(context) }
+    val installedCode = remember { UpdateInstaller.installedVersion(context) }
     val keyFingerprint = remember { core.developerKeyFingerprint() }
     var state by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
 
@@ -66,7 +67,7 @@ fun UpdateScreen(onBack: () -> Unit) {
         Button(onClick = onBack) { Text("Back") }
         Text("Updates", style = MaterialTheme.typography.titleLarge)
 
-        Text("Installed version: $installed", style = MaterialTheme.typography.bodyMedium)
+        Text("Installed version: $installedName", style = MaterialTheme.typography.bodyMedium)
         Text(
             if (keyFingerprint == null) {
                 "No developer key is set in this build. Every update is refused."
@@ -90,6 +91,7 @@ fun UpdateScreen(onBack: () -> Unit) {
                             core.receiveUpdate(
                                 UpdateInstaller.LISTEN_ADDR,
                                 UpdateInstaller.LISTEN_TIMEOUT_SECS,
+                                installedCode,
                             )
                         }
                         UpdateState.Verified(apk)

@@ -23,7 +23,7 @@ class UpdateGateTest {
     fun verifyRefusesEveryUpdateWhileNoKeyIsCompiledIn() {
         val messenger = Messenger()
         assertThrows(FacadeException.AuthFailed::class.java) {
-            messenger.verifyUpdate(ByteArray(16) { 1 }, ByteArray(64))
+            messenger.verifyUpdate(ByteArray(16) { 1 }, 2UL, ByteArray(64), 1UL)
         }
     }
 
