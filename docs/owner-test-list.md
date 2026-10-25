@@ -22,7 +22,7 @@ cd ~/sovereign-messenger/spikes/t0-arti
 
 Result: bootstrap 11.16 s, publish 67.65 s with saved state (334 s the first time). Recorded in PLAN.md.
 
-### A2. The real Tor test of the core. 2 of 3 PASSED; RE-RUN THE THIRD
+### A2. The real Tor test of the core. DONE 2026-10-25, all 3 PASSED
 
 Why: this is the first time the product code (not the spike) talks to real Tor. It starts two
 nodes, pairs them, dials one from the other over Tor, and sends a message each way.
@@ -34,23 +34,8 @@ cd rust-core
 cargo test --features tor --test tor_live -- --ignored --nocapture --test-threads=1
 ```
 
-Result so far: `a_restored_identity_comes_up_under_the_same_onion_address` and
-`a_warm_restart_with_saved_state_is_measured` passed (warm start 20 s against 88 s cold).
-`two_identities_message_each_other_over_tor` failed because of a bug in my test (it pinned
-the contacts under the wrong names), not in the app. It is fixed. Please run just that test
-again, after `git pull`:
-
-```bash
-cd ~/sovereign-messenger/rust-core
-cargo test --features tor --test tor_live two_identities -- --ignored --nocapture
-```
-
-This is the first time the product code would dial a contact over Tor, run the handshake and
-send a message each way, so it is the most important one. It can take 5 to 10 minutes: one of
-the two services took about 5 minutes to publish last time.
-Paste: the whole output, including every `RESULT` line.
-Pass: the test passes, with a `RESULT connect + handshake over Tor` line and a
-`RESULT first message latency` line. If it fails or times out, paste the last 60 lines.
+Result: all three passed. The two-identity test connected over Tor (handshake 8.6 s) and a
+message arrived in 143 ms. Recorded in PLAN.md ("Tor live results").
 
 ### A3. The ordinary test suite with Tor compiled in. RE-RUN WITH --no-fail-fast
 
@@ -157,3 +142,18 @@ have one) while messaging. Pass: no connection to the other phone's local addres
 - Independent review of the cryptographic design (`docs/hardening-review.md`, section 5).
 - Optional: why the Windows build of the spike stalls at 15% (firewall or antivirus on `t0-arti.exe`).
   Not needed for the Android app.
+
+## A4. Why does the second node take about 5 minutes to publish? (20 minutes, optional)
+
+In both runs of the two-identity test the second node to start took 320 to 350 s to be ready; every
+single node took 18 to 88 s. This shows whether it is about starting two at once or about this machine.
+Run the first one, wait for it to finish, then the second, and paste the `RESULT` lines of each:
+
+```bash
+cd ~/sovereign-messenger/rust-core
+# One node on its own, three times in a row:
+for i in 1 2 3; do cargo test --features tor --test tor_live a_restored -- --ignored --nocapture; done
+```
+
+If all three are fast (under about 90 s), the slowness comes from starting two nodes together.
+If some take 5 minutes, it is how long Tor takes to publish on your connection at times.

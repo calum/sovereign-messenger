@@ -42,7 +42,7 @@ Use `mise` tasks; they are the source of truth (see `mise.toml`).
 ## Known gaps (do not paper over)
 
 - `CoreBridge` calls `rust-core` through UniFFI, and the TCP transport works on loopback only. Nothing has been sent between two phones, and the native library has not been run on a device.
-- The Tor transport (cargo feature `tor`, on in the Android build) is written and unit tested, but it has not yet run over the real Tor network from the app or on a phone. Do not claim in the UI, README or tour that traffic is private from a network observer until `PLAN.md` T4 passes. The same-Wi-Fi TCP path is a test path and is not private. Do not add a central relay or cloud service as a shortcut.
+- The Tor transport (cargo feature `tor`, on in the Android build) is written and unit tested, and in one live test on a laptop two identities connected and exchanged messages over the real Tor network, but it has not run from the app, on a phone, or between two separate machines. Do not claim in the UI, README or tour that traffic is private from a network observer until `PLAN.md` T4 passes. The same-Wi-Fi TCP path is a test path and is not private. Do not add a central relay or cloud service as a shortcut.
 - The ratchet's DH step is standard but not independently reviewed. The first-peer-key bootstrap (no DH step for the first message) is a deliberate deviation; see PLAN.md Decisions.
 - `mlock` can fail silently at the call site; `SecretBytes::is_locked` reports it.
 - `Chain` and `Identity` hold secrets on the stack during operations; intermediate copies are not all wiped.
