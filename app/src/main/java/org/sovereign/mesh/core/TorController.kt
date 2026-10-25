@@ -42,7 +42,11 @@ class TorController(private val core: CoreBridge, private val stateDir: File) {
                         TorState.NOT_BUILT -> return@launch
                         TorState.STOPPED -> core.startTor(stateDir.absolutePath)
                         TorState.READY ->
-                            if (accepting?.isActive != true) accepting = launch { acceptLoop() }
+                            if (accepting?.isActive != true) {
+                                // Several workers, so one caller that stalls its handshake (the onion
+                                // address is not secret) cannot hold up the real contacts behind it.
+                                accepting = launch { repeat(ACCEPT_WORKERS) { launch { acceptLoop() } } }
+                            }
                         TorState.FAILED -> {
                             // Try again after a pause; start() on a failed node makes a fresh one.
                             val since = failedSince ?: System.currentTimeMillis().also { failedSince = it }
@@ -89,6 +93,7 @@ class TorController(private val core: CoreBridge, private val stateDir: File) {
 
     private companion object {
         const val POLL_MS = 2_000L
+        const val ACCEPT_WORKERS = 4
         const val ACCEPT_SECONDS = 30
         const val ACCEPT_RETRY_MS = 500L
         const val RESTART_AFTER_MS = 30_000L
