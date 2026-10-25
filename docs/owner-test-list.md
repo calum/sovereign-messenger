@@ -61,7 +61,7 @@ mise run android:debug     # builds the debug APK
 
 Install `app/build/outputs/apk/debug/app-debug.apk`. To install it on the phone without a cable, put the phone on the same Wi-Fi as the laptop (not a guest network) and run `mise run android:share`. Scan the QR code with the phone's camera, open the link, and install. Press Ctrl+C on the laptop when you are done.
 
-### B1. The app starts and the native library loads
+### B1. The app starts and the native library loads. DONE 2026-10-25 (owner reports it installs and runs)
 
 Status 2026-10-25: the first install crashed at launch because the library was named wrongly.
 That is fixed. After `git pull` you must rebuild the native library, because a `jniLibs` folder
