@@ -679,7 +679,11 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_connect_peer(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_data_key(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_developer_key_fingerprint(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_export_vault(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_forget(
     ): Int
@@ -737,7 +741,11 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_pairingassembler_total(
     ): Int
+    external fun uniffi_rust_core_checksum_constructor_messenger_create_persistent(
+    ): Int
     external fun uniffi_rust_core_checksum_constructor_messenger_new(
+    ): Int
+    external fun uniffi_rust_core_checksum_constructor_messenger_restore(
     ): Int
     external fun uniffi_rust_core_checksum_constructor_pairingassembler_new(
     ): Int
@@ -765,13 +773,21 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_rust_core_fn_free_messenger(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_rust_core_fn_constructor_messenger_create_persistent(uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     external fun uniffi_rust_core_fn_constructor_messenger_new(uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    external fun uniffi_rust_core_fn_constructor_messenger_restore(`dataKey`: RustBuffer.ByValue,`vaultBlob`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_rust_core_fn_method_messenger_accept_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`init`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_connect_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,`addr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_data_key(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_developer_key_fingerprint(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_export_vault(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_forget(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -960,7 +976,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_connect_peer() and 0xFFFF) != 47327) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_data_key() and 0xFFFF) != 64194) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_method_messenger_developer_key_fingerprint() and 0xFFFF) != 29530) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_export_vault() and 0xFFFF) != 36389) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_forget() and 0xFFFF) != 56790) {
@@ -1047,7 +1069,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_pairingassembler_total() and 0xFFFF) != 17627) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_rust_core_checksum_constructor_messenger_create_persistent() and 0xFFFF) != 25286) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_constructor_messenger_new() and 0xFFFF) != 30152) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_constructor_messenger_restore() and 0xFFFF) != 1291) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_constructor_pairingassembler_new() and 0xFFFF) != 28338) {
@@ -1500,10 +1528,23 @@ public interface MessengerInterface {
     fun `connectPeer`(`peerId`: kotlin.String, `addr`: kotlin.String)
     
     /**
+     * The vault key, handed out once so Kotlin can wrap it with the Keystore.
+     * `Internal` for a messenger made with `new()`, which has no vault.
+     */
+    fun `dataKey`(): kotlin.ByteArray
+    
+    /**
      * Fingerprint of the developer key compiled into this build, for the update
      * screen. `None` when no key is pinned, in which case every update is refused.
      */
     fun `developerKeyFingerprint`(): kotlin.String?
+    
+    /**
+     * The identity and pins sealed under the data key, fresh nonce each call.
+     * Call it after `scan_pairing`, `unpin` or any handshake that pins a new peer,
+     * and write the result to app-private storage excluded from backup.
+     */
+    fun `exportVault`(): kotlin.ByteArray
     
     /**
      * Ends one conversation and its ratchet state. The pin stays (see `unpin`).
@@ -1822,6 +1863,24 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
+     * The vault key, handed out once so Kotlin can wrap it with the Keystore.
+     * `Internal` for a messenger made with `new()`, which has no vault.
+     */
+    @Throws(FacadeException::class)override fun `dataKey`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_data_key(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Fingerprint of the developer key compiled into this build, for the update
      * screen. `None` when no key is pinned, in which case every update is refused.
      */override fun `developerKeyFingerprint`(): kotlin.String? {
@@ -1829,6 +1888,25 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     callWithHandle {
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_rust_core_fn_method_messenger_developer_key_fingerprint(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * The identity and pins sealed under the data key, fresh nonce each call.
+     * Call it after `scan_pairing`, `unpin` or any handshake that pins a new peer,
+     * and write the result to app-private storage excluded from backup.
+     */
+    @Throws(FacadeException::class)override fun `exportVault`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_export_vault(
         it,
         _status)
 }
@@ -2322,11 +2400,44 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
 
     
-    
+    companion object {
+        
     /**
-     * @suppress
+     * A fresh identity with a fresh data key, for a first launch. The caller takes
+     * `data_key` once to have it wrapped, then stores `export_vault` after every pin change.
+     */ fun `createPersistent`(): Messenger {
+            return FfiConverterTypeMessenger.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_rust_core_fn_constructor_messenger_create_persistent(
+    
+        _status)
+}
+    )
+    }
+    
+
+        
+    /**
+     * Rebuilds the identity and pins from a stored vault. `AuthFailed` for a wrong
+     * key or any changed byte, `Malformed` for a short blob or a key that is not
+     * 32 bytes. Nothing is partly restored on a refusal. Sessions and messages
+     * are not in the vault, so the restored messenger starts with none.
      */
-    companion object
+    @Throws(FacadeException::class) fun `restore`(`dataKey`: kotlin.ByteArray, `vaultBlob`: kotlin.ByteArray): Messenger {
+            return FfiConverterTypeMessenger.lift(
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_constructor_messenger_restore(
+    
+        
+        FfiConverterByteArray.lower(`dataKey`),
+        FfiConverterByteArray.lower(`vaultBlob`),_status)
+}
+    )
+    }
+    
+
+        
+    }
     
 }
 

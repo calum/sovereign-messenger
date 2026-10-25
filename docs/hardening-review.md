@@ -70,7 +70,8 @@ Results:
 
 ### L4. Stack copies of the ML-KEM seed: RESIDUAL, NOT FIXED
 
-- `Identity::generate` copies the 64-byte seed with `.into()` into a temporary that `seed.zeroize()` does not clear. CLAUDE.md lists this as a known gap for `Identity`.
+- `Identity::from_secrets` copies the 64-byte seed with `.into()` into a temporary that the caller's `seed.zeroize()` does not clear (`generate` now goes through it). CLAUDE.md lists this as a known gap for `Identity`.
+- The vault (`rust-core/src/vault.rs`, added 2026-10-25) adds two exposures. `Messenger::data_key` returns the 32-byte data key as a `Vec<u8>` that crosses into Kotlin once, so the plaintext key sits on the Java heap while it is wrapped or unwrapped; `IdentityVault` zeroes the array straight after, but the JVM may have copied it. `restore` takes it back the same way. Separately, `Identity` now keeps the ML-KEM seed in a `SecretBytes` so it can be sealed. The serialised vault contents are built in a `Zeroizing` buffer. A reviewer should check the vault format (`version || nonce || ciphertext`, version and a fixed label as associated data, random 96-bit nonce per seal) and the claim that the number of seals under one key stays small.
 - Not fixed in this pass. A test cannot observe stack copies. A fix would keep the seed in one `B64` array and pass it by reference.
 
 ## 3. `FLAG_SECURE` on a real device: NOT VERIFIED

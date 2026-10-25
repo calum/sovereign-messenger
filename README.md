@@ -50,7 +50,8 @@ Be skeptical of every claim in this repo until it has been tested and reviewed.
 | Forward secrecy within a chain | Implemented (symmetric ratchet). |
 | Post-compromise security | Implemented (DH ratchet step). Tested; not independently reviewed. |
 | Metadata resistance / onion routing | Not implemented. |
-| RAM-only storage | Enforced in the Rust store (no persistence API). The Android app does not write message data to disk, but this is not yet verified. |
+| RAM-only messages | Enforced in the Rust store (no persistence API). The Android app does not write message data to disk, but this is not yet verified. |
+| Stored identity and contacts | Implemented, not run on a device. The identity secrets and pinned contacts are sealed by the Rust core (ChaCha20-Poly1305) under a data key that the Android Keystore wraps; app-private files, excluded from backup. Messages and sessions are never stored. Tested on the JVM with an in-memory stand-in for the Keystore; the real Keystore path (including StrongBox) has not run. Deleting the identity from the chat list erases it with no recovery. |
 | Memory locking (`mlock`) | Best effort. Can fail under a low `RLIMIT_MEMLOCK`; the code records the failure instead of hiding it. Copies made on the stack during crypto operations are not all wiped. |
 | Screenshot / recents protection | `FLAG_SECURE` set in `MainActivity`. Not verified on a device. |
 | Cloud/device backups | Disabled in the manifest and backup rules. |

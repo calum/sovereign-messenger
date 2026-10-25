@@ -13,7 +13,23 @@ import uniffi.rust_core.PairingAssembler
  * calls that block (`connect`, `listen`, `receiveOnce`) must run off the UI
  * thread. Errors are thrown as [FacadeException]; they carry no message content.
  */
-class CoreBridge(private val messenger: Messenger = Messenger()) {
+class CoreBridge(
+    private val messenger: Messenger = Messenger(),
+    private val vault: IdentityVault? = null,
+) {
+    /**
+     * True if the last attempt to store the identity and pins failed. They are still
+     * usable in memory, but a restart would lose the change. Read by the chat list.
+     */
+    @Volatile
+    var saveFailed: Boolean = false
+        private set
+
+    /** Stores the identity and pins after a change. Messages are never stored. */
+    private fun persist() {
+        val v = vault ?: return
+        saveFailed = !v.save(messenger)
+    }
 
     fun peers(): List<String> = messenger.peers()
 
@@ -72,6 +88,7 @@ class CoreBridge(private val messenger: Messenger = Messenger()) {
     /** Pins a scanned identity under [peer]. A changed key is refused and reported, never applied. */
     fun scanPairing(peer: String, payload: ByteArray): PairingOutcome =
         pairingOutcome(peer) { messenger.scanPairing(peer, payload) }
+            .also { if (it is PairingOutcome.Pinned) persist() }
 
     fun pinnedPeers(): List<String> = messenger.pinnedPeers()
 
@@ -80,6 +97,7 @@ class CoreBridge(private val messenger: Messenger = Messenger()) {
     /** The user checked the new key in person and accepts it. The next scan pins it. */
     fun acceptNewKey(peer: String) {
         messenger.unpin(peer)
+        persist()
     }
 
     /**
