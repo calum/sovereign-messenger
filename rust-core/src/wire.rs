@@ -141,7 +141,7 @@ pub fn send_handshake(link: &dyn Transport, init: &HandshakeInit) -> Result<(), 
 }
 
 pub fn receive_handshake(link: &dyn Transport) -> Result<HandshakeInit, CoreError> {
-    decode_handshake(&next_frame(link)?)
+    decode_handshake(&next_frame_within(link, link.responder_deadline())?)
 }
 
 /// Seals `plaintext` on the session and sends it. The session advances only after
@@ -180,7 +180,15 @@ pub fn open_frame(session: &mut DoubleRatchet, frame: &[u8]) -> Result<Vec<u8>, 
 
 /// Waits for the next frame, looping over idle polls until a deadline.
 fn next_frame(link: &dyn Transport) -> Result<Vec<u8>, CoreError> {
-    let deadline = Instant::now() + link.handshake_deadline();
+    next_frame_within(link, link.handshake_deadline())
+}
+
+/// Like `next_frame` with the wait chosen by the caller.
+fn next_frame_within(
+    link: &dyn Transport,
+    wait: std::time::Duration,
+) -> Result<Vec<u8>, CoreError> {
+    let deadline = Instant::now() + wait;
     loop {
         match link.receive().map_err(map_transport)? {
             Some(frame) => return Ok(frame),

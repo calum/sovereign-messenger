@@ -268,6 +268,8 @@ impl Messenger {
     /// are not in the vault, so the restored messenger starts with none.
     #[uniffi::constructor]
     pub fn restore(data_key: Vec<u8>, vault_blob: Vec<u8>) -> Result<Arc<Self>, FacadeError> {
+        // The caller's copy of the key is wiped when this returns, whichever way it returns.
+        let data_key = zeroize::Zeroizing::new(data_key);
         let key = Key32(to_array32(&data_key)?);
         let plain = vault::open(&key, &vault_blob)?;
         let (identity, public, pins) = vault::decode_contents(plain.expose())?;
@@ -344,6 +346,18 @@ impl Messenger {
     ) -> Result<ScannedPeer, FacadeError> {
         let (public, connection_hint) = pairing::decode(&payload)?;
         let mut st = self.lock()?;
+        // Your own code is never a contact, and one key is pinned under one label only:
+        // otherwise a caller identified by its key could match two contacts.
+        if public == st.public {
+            return Err(FacadeError::Malformed);
+        }
+        if st
+            .pins
+            .iter()
+            .any(|(label, pinned)| *label != peer_id && pinned.x25519 == public.x25519)
+        {
+            return Err(FacadeError::DuplicatePin);
+        }
         match st.pins.get(&peer_id) {
             Some(pinned) if *pinned == public => Err(FacadeError::DuplicatePin),
             Some(_) => Err(FacadeError::PinChanged),
@@ -564,27 +578,48 @@ impl Messenger {
         #[cfg(feature = "tor")]
         {
             use crate::tor::{Phase, TorNode};
-            let mut st = self.lock()?;
-            if let Some(node) = &st.tor {
-                if node.status().phase != Phase::Failed {
-                    return Ok(());
+            let replaced = {
+                let mut st = self.lock()?;
+                if let Some(node) = &st.tor {
+                    if node.status().phase != Phase::Failed {
+                        return Ok(());
+                    }
                 }
+                // A failed node is replaced. Sessions that ran over it go with it.
+                let old = st.tor.take();
+                st.sessions.retain(|_, s| !runs_over_tor(s));
+                let mut seed = [0u8; 32];
+                seed.copy_from_slice(st.identity.onion_seed());
+                let started =
+                    TorNode::start(std::path::Path::new(&state_dir), &seed, st.public.onion);
+                seed.zeroize();
+                st.tor = Some(started.map_err(|_| FacadeError::Network)?);
+                old
+            };
+            // Stopped outside the lock: shutting a node down can take a moment, and the UI
+            // reads this state on its own thread.
+            if let Some(old) = replaced {
+                old.shutdown();
             }
-            let mut seed = [0u8; 32];
-            seed.copy_from_slice(st.identity.onion_seed());
-            let started = TorNode::start(std::path::Path::new(&state_dir), &seed, st.public.onion);
-            seed.zeroize();
-            st.tor = Some(started.map_err(|_| FacadeError::Network)?);
             Ok(())
         }
     }
 
-    /// Stops Tor and the onion service. Open Tor links close with it. Harmless if not started.
+    /// Stops Tor and the onion service, and ends every session that ran over Tor: a session
+    /// whose carrier is gone must not linger as if it were connected. Sessions on other
+    /// carriers are untouched. Harmless if Tor was not started.
     pub fn tor_stop(&self) -> Result<(), FacadeError> {
         #[cfg(feature = "tor")]
-        {
-            let node = self.lock()?.tor.take();
-            drop(node); // dropped outside the lock: stopping the runtime can take a moment
+        let node = {
+            let mut st = self.lock()?;
+            st.sessions.retain(|_, s| !runs_over_tor(s));
+            st.tor.take()
+        };
+        #[cfg(not(feature = "tor"))]
+        self.lock()?.sessions.retain(|_, s| !runs_over_tor(s));
+        #[cfg(feature = "tor")]
+        if let Some(node) = node {
+            node.shutdown(); // outside the lock, and waiting accepts return at once
         }
         Ok(())
     }
@@ -983,6 +1018,11 @@ fn pin_or_check(st: &mut State, peer_id: &str, peer: &IdentityPublic) -> Result<
     }
 }
 
+/// Whether the session's link is carried over Tor.
+fn runs_over_tor(session: &Session) -> bool {
+    session.link.as_ref().is_some_and(|link| link.is_onion())
+}
+
 fn lock_ratchet(
     ratchet: &Mutex<DoubleRatchet>,
 ) -> Result<MutexGuard<'_, DoubleRatchet>, FacadeError> {
@@ -1049,5 +1089,66 @@ mod update_facade_tests {
             m.verify_update(b"apk".to_vec(), 2, vec![0u8; 64], 1),
             Err(FacadeError::AuthFailed)
         );
+    }
+}
+
+#[cfg(all(test, feature = "tor"))]
+mod tor_session_tests {
+    use super::*;
+    use crate::tor::{OwnedRuntime, StreamTransport};
+    use tokio_util::compat::TokioAsyncReadCompatExt;
+
+    fn paired() -> (Arc<Messenger>, Arc<Messenger>) {
+        let a = Messenger::new();
+        let b = Messenger::new();
+        a.scan_pairing("b".into(), b.own_pairing_payload(String::new()).unwrap())
+            .unwrap();
+        b.scan_pairing("a".into(), a.own_pairing_payload(String::new()).unwrap())
+            .unwrap();
+        (a, b)
+    }
+
+    /// Opens an onion-style session between the two over an in-memory pipe.
+    fn link_over_pipe(a: &Arc<Messenger>, b: &Arc<Messenger>) -> Arc<OwnedRuntime> {
+        let rt = Arc::new(OwnedRuntime::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap(),
+        ));
+        let (x, y) = tokio::io::duplex(1024 * 1024);
+        let keep: Arc<dyn std::any::Any + Send + Sync> = rt.clone();
+        let xa = StreamTransport::new(rt.handle(), x.compat()).keep_alive(Arc::clone(&keep));
+        let yb = StreamTransport::new(rt.handle(), y.compat()).keep_alive(keep);
+        let b2 = Arc::clone(b);
+        let responder = std::thread::spawn(move || b2.respond_on_link(Arc::new(yb), None));
+        a.initiate_on_link("b".into(), Arc::new(xa)).unwrap();
+        assert_eq!(responder.join().unwrap().unwrap(), "a");
+        rt
+    }
+
+    #[test]
+    fn stopping_tor_ends_the_sessions_that_ran_over_it() {
+        let (a, b) = paired();
+        let _rt = link_over_pipe(&a, &b);
+        assert_eq!(a.linked_peers().unwrap(), vec!["b".to_string()]);
+        a.tor_stop().unwrap();
+        assert!(a.peers().unwrap().is_empty(), "a Tor session outlived Tor");
+        assert!(a.linked_peers().unwrap().is_empty());
+        // The other phone's session is its own business and is untouched.
+        assert_eq!(b.peers().unwrap(), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn stopping_tor_leaves_in_process_sessions_alone() {
+        let (a, b) = paired();
+        let c = b.responder_challenge().unwrap();
+        let init = a
+            .start_session("b".into(), b.own_identity().unwrap(), c.clone())
+            .unwrap();
+        b.accept_session("a".into(), init, c).unwrap();
+        a.tor_stop().unwrap();
+        assert_eq!(a.peers().unwrap(), vec!["b".to_string()]);
     }
 }

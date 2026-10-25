@@ -1,5 +1,6 @@
 package org.sovereign.mesh.core
 
+import uniffi.rust_core.FacadeException
 import uniffi.rust_core.LockReport
 import uniffi.rust_core.Messenger
 import uniffi.rust_core.PairingAssembler
@@ -108,9 +109,21 @@ class CoreBridge(
     /** Whether this phone dials [peer] or waits for the call. Only one side of a pair dials. */
     fun torRole(peer: String): TorRole = messenger.torRole(peer)
 
-    /** Dials [peer]'s onion address and runs the handshake. Blocking, possibly minutes. */
+    /** Contacts being dialled right now, so one contact is never dialled twice at once. */
+    private val dialling = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Dials [peer]'s onion address and runs the handshake. Blocking, possibly minutes. A second
+     * call for the same contact while one is running is refused: two dials would each make a
+     * session and the later would replace the earlier, leaving the phones on different links.
+     */
     fun connectTor(peer: String) {
-        messenger.connectPeerTor(peer)
+        if (!dialling.add(peer)) throw FacadeException.Network("already dialling")
+        try {
+            messenger.connectPeerTor(peer)
+        } finally {
+            dialling.remove(peer)
+        }
     }
 
     /** Waits for any pinned contact to call, and returns their label. Blocking. */

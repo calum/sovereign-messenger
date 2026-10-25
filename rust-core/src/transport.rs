@@ -52,6 +52,18 @@ pub trait Transport: Send + Sync {
     fn handshake_deadline(&self) -> Duration {
         Duration::from_secs(10)
     }
+
+    /// How long the responder waits for the initiator's handshake after sending its challenge.
+    /// A caller who connects and says nothing costs a worker this long, so a carrier that
+    /// anyone can reach (an onion service) sets it shorter than the general deadline.
+    fn responder_deadline(&self) -> Duration {
+        self.handshake_deadline()
+    }
+
+    /// True for a link carried over Tor. Ending Tor ends the sessions on such links.
+    fn is_onion(&self) -> bool {
+        false
+    }
 }
 
 /// One TCP connection. Each frame is a 4-byte big-endian length, then the body.

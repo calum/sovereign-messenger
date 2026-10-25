@@ -4,7 +4,9 @@
 //! allocated, and a frame cut short is reported, never delivered. Authenticity is still
 //! decided above this layer by the handshake and the ratchet, not here.
 
+use std::any::Any;
 use std::io;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -26,6 +28,9 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long the handshake helpers wait for each frame on an onion link.
 const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(60);
 
+/// How long the responder waits for the initiator's handshake after its challenge.
+const RESPONDER_DEADLINE: Duration = Duration::from_secs(20);
+
 const READ_CHUNK: usize = 16 * 1024;
 
 /// Frames over any byte stream: a 4-byte big-endian length, then the body. The Tor
@@ -38,6 +43,10 @@ pub struct StreamTransport<S> {
     handle: Handle,
     reader: Mutex<Reader<ReadHalf<S>>>,
     writer: Mutex<WriteHalf<S>>,
+    /// Keeps the runtime that drives this stream alive for as long as the link exists.
+    /// Calling `block_on` with a timer on a handle whose runtime was dropped panics, and
+    /// a panic aborts the app (`panic = "abort"`).
+    _keepalive: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 struct Reader<R> {
@@ -57,6 +66,43 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> StreamTransport<S> {
                 buf: Vec::new(),
             }),
             writer: Mutex::new(write),
+            _keepalive: None,
+        }
+    }
+
+    /// Ties the lifetime of `owner` (the runtime) to this link.
+    pub fn keep_alive(mut self, owner: Arc<dyn Any + Send + Sync>) -> Self {
+        self._keepalive = Some(owner);
+        self
+    }
+}
+
+/// Owns a tokio runtime and never blocks when dropped. A plain `Runtime` panics if it is
+/// dropped inside async code, and the last holder of a link can be a worker thread; this
+/// shuts down in the background instead, so it is safe to drop from anywhere.
+pub struct OwnedRuntime {
+    runtime: Option<tokio::runtime::Runtime>,
+}
+
+impl OwnedRuntime {
+    pub fn new(runtime: tokio::runtime::Runtime) -> Self {
+        Self {
+            runtime: Some(runtime),
+        }
+    }
+
+    pub fn handle(&self) -> Handle {
+        self.runtime
+            .as_ref()
+            .map(|r| r.handle().clone())
+            .expect("runtime present until drop")
+    }
+}
+
+impl Drop for OwnedRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
         }
     }
 }
@@ -94,6 +140,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Transport for StreamTra
     /// An onion circuit is slow to answer, so each handshake frame gets longer than on a LAN.
     fn handshake_deadline(&self) -> Duration {
         HANDSHAKE_DEADLINE
+    }
+
+    /// A stranger can open a stream to an onion service and say nothing. A real contact answers
+    /// the challenge within a round trip or two, so the responder waits far less than for the
+    /// initiator's side.
+    fn responder_deadline(&self) -> Duration {
+        RESPONDER_DEADLINE
+    }
+
+    fn is_onion(&self) -> bool {
+        true
     }
 }
 
@@ -172,7 +229,7 @@ fn map_write_error(e: &io::Error) -> TransportError {
 use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Mutex as StdMutex;
 
 use arti_client::config::TorClientConfigBuilder;
 use arti_client::{DataStream, TorClient};
@@ -186,7 +243,7 @@ use tor_keymgr::config::ArtiKeystoreKind;
 use tor_llcrypto::pk::ed25519::{ExpandedKeypair, Keypair};
 use tor_proto::stream::IncomingStreamRequest;
 use tor_rtcompat::PreferredRuntime;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::onion;
 
@@ -227,6 +284,13 @@ struct Shared {
 }
 
 impl Shared {
+    /// Sets the phase even from `Failed`; used when the node is shut down.
+    fn force(&self, phase: Phase) {
+        if let Ok(mut p) = self.phase.lock() {
+            *p = phase;
+        }
+    }
+
     fn set(&self, phase: Phase) {
         if let Ok(mut p) = self.phase.lock() {
             // Failed is final: a late status event must not turn it back into progress.
@@ -242,11 +306,20 @@ impl Shared {
 /// primary keystore is the in-memory one, so only public directory data and guard
 /// state go to `state_dir`.
 pub struct TorNode {
-    runtime: tokio::runtime::Runtime,
+    runtime: Arc<OwnedRuntime>,
     shared: Arc<Shared>,
     client: Arc<StdMutex<Option<Arc<TorClient<PreferredRuntime>>>>>,
-    incoming: StdMutex<Receiver<StreamTransport<DataStream>>>,
+    incoming: StdMutex<Receiver<Incoming>>,
+    /// Every task the node spawned, so `shutdown` can stop them all.
+    tasks: Arc<StdMutex<Vec<tokio::task::AbortHandle>>>,
 }
+
+/// A stream waiting to be picked up, with when it arrived.
+type Incoming = (Instant, StreamTransport<DataStream>);
+
+/// A queued stream older than this is dropped unread: a stranger who opened one and went
+/// quiet must not keep a place in the queue.
+const MAX_QUEUE_AGE: Duration = Duration::from_secs(45);
 
 impl TorNode {
     /// Starts bootstrapping in the background and returns at once; read `status` to see
@@ -260,45 +333,66 @@ impl TorNode {
     ) -> Result<Arc<Self>, TransportError> {
         prepare_dir(state_dir)?;
         install_crypto_provider();
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("tor")
-            .enable_all()
-            .build()
-            .map_err(|_| TransportError::Io)?;
+        let runtime = Arc::new(OwnedRuntime::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_name("tor")
+                .enable_all()
+                .build()
+                .map_err(|_| TransportError::Io)?,
+        ));
         let shared = Arc::new(Shared {
             phase: StdMutex::new(Phase::Starting),
             percent: AtomicU8::new(0),
         });
         let client = Arc::new(StdMutex::new(None));
         let (tx, rx) = sync_channel(MAX_PENDING_INCOMING);
-        let mut seed = *onion_seed;
+        // Wiped when the task ends or is dropped, whichever happens first.
+        let seed = Zeroizing::new(*onion_seed);
+        let tasks = Arc::new(StdMutex::new(Vec::new()));
         let task_shared = Arc::clone(&shared);
         let task_client = Arc::clone(&client);
-        let handle = runtime.handle().clone();
+        let task_runtime = Arc::clone(&runtime);
+        let task_list = Arc::clone(&tasks);
         let state_dir = state_dir.to_path_buf();
-        runtime.spawn(async move {
-            let result = run(
-                &state_dir,
-                &seed,
-                expected_onion,
-                &task_shared,
-                &task_client,
-                tx,
-                handle,
-            )
-            .await;
-            seed.zeroize();
+        let main = runtime.handle().spawn(async move {
+            let ctx = RunContext {
+                shared: Arc::clone(&task_shared),
+                client_slot: task_client,
+                incoming: tx,
+                runtime: task_runtime,
+                tasks: task_list,
+            };
+            let result = run(&state_dir, &seed, expected_onion, ctx).await;
             if result.is_err() {
                 task_shared.set(Phase::Failed);
             }
         });
+        if let Ok(mut list) = tasks.lock() {
+            list.push(main.abort_handle());
+        }
         Ok(Arc::new(Self {
             runtime,
             shared,
             client,
             incoming: StdMutex::new(rx),
+            tasks,
         }))
+    }
+
+    /// Stops the Tor client and the onion service, and makes every waiting `accept` return
+    /// at once. Safe to call more than once. Links already handed out keep the runtime alive
+    /// until they are dropped, but nothing new is accepted and no new circuit is built.
+    pub fn shutdown(&self) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            for task in tasks.drain(..) {
+                task.abort();
+            }
+        }
+        if let Ok(mut slot) = self.client.lock() {
+            *slot = None;
+        }
+        self.shared.force(Phase::Failed);
     }
 
     pub fn status(&self) -> Status {
@@ -329,23 +423,37 @@ impl TorNode {
             .clone()
             .ok_or(TransportError::Io)?;
         let target = (onion_address.to_owned(), ONION_PORT);
-        let stream = self.runtime.block_on(async {
+        let handle = self.runtime.handle();
+        let stream = handle.block_on(async {
             tokio::time::timeout(CONNECT_TIMEOUT, client.connect(target)).await
         });
         match stream {
-            Ok(Ok(stream)) => Ok(StreamTransport::new(self.runtime.handle().clone(), stream)),
+            Ok(Ok(stream)) => Ok(StreamTransport::new(handle, stream)
+                .keep_alive(Arc::clone(&self.runtime) as Arc<dyn Any + Send + Sync>)),
             _ => Err(TransportError::Io),
         }
     }
 
     /// Waits up to `timeout` for the next inbound stream to the onion service.
     pub fn accept(&self, timeout: Duration) -> Result<StreamTransport<DataStream>, TransportError> {
+        let deadline = Instant::now() + timeout;
         let rx = self.incoming.lock().map_err(|_| TransportError::Io)?;
-        match rx.recv_timeout(timeout) {
-            Ok(link) => Ok(link),
-            Err(RecvTimeoutError::Timeout) => Err(TransportError::Io),
-            Err(RecvTimeoutError::Disconnected) => Err(TransportError::Closed),
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(left) {
+                // A stale stream is dropped and the next one is tried.
+                Ok((arrived, _)) if arrived.elapsed() > MAX_QUEUE_AGE => continue,
+                Ok((_, link)) => return Ok(link),
+                Err(RecvTimeoutError::Timeout) => return Err(TransportError::Io),
+                Err(RecvTimeoutError::Disconnected) => return Err(TransportError::Closed),
+            }
         }
+    }
+}
+
+impl Drop for TorNode {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -390,15 +498,35 @@ fn client_config_with(
     builder.build().map_err(|_| TransportError::Io)
 }
 
+/// What the background task shares with the node that started it.
+struct RunContext {
+    shared: Arc<Shared>,
+    client_slot: Arc<StdMutex<Option<Arc<TorClient<PreferredRuntime>>>>>,
+    incoming: SyncSender<Incoming>,
+    runtime: Arc<OwnedRuntime>,
+    tasks: Arc<StdMutex<Vec<tokio::task::AbortHandle>>>,
+}
+
 async fn run(
     state_dir: &Path,
     seed: &[u8; 32],
     expected_onion: [u8; 32],
-    shared: &Arc<Shared>,
-    client_slot: &Arc<StdMutex<Option<Arc<TorClient<PreferredRuntime>>>>>,
-    incoming: SyncSender<StreamTransport<DataStream>>,
-    handle: Handle,
+    ctx: RunContext,
 ) -> Result<(), TransportError> {
+    let RunContext {
+        shared,
+        client_slot,
+        incoming,
+        runtime,
+        tasks,
+    } = ctx;
+    let shared = &shared;
+    let handle = runtime.handle();
+    let register = |task: tokio::task::AbortHandle| {
+        if let Ok(mut list) = tasks.lock() {
+            list.push(task);
+        }
+    };
     shared.set(Phase::Bootstrapping);
     let config = client_config(state_dir)?;
     let client = Arc::new(
@@ -411,12 +539,15 @@ async fn run(
 
     let mut events = client.bootstrap_events();
     let progress = Arc::clone(shared);
-    tokio::spawn(async move {
-        while let Some(status) = events.next().await {
-            let pct = (status.as_frac() * 100.0).clamp(0.0, 100.0) as u8;
-            progress.percent.store(pct, Ordering::Relaxed);
-        }
-    });
+    register(
+        tokio::spawn(async move {
+            while let Some(status) = events.next().await {
+                let pct = (status.as_frac() * 100.0).clamp(0.0, 100.0) as u8;
+                progress.percent.store(pct, Ordering::Relaxed);
+            }
+        })
+        .abort_handle(),
+    );
     client.bootstrap().await.map_err(|_| TransportError::Io)?;
     if let Ok(mut slot) = client_slot.lock() {
         *slot = Some(Arc::clone(&client));
@@ -438,16 +569,19 @@ async fn run(
 
     let status_shared = Arc::clone(shared);
     let mut status_events = service.status_events();
-    tokio::spawn(async move {
-        let _keep_alive = service; // the service stops when its last handle drops
-        while let Some(status) = status_events.next().await {
-            match status.state() {
-                State::DegradedReachable | State::Running => status_shared.set(Phase::Ready),
-                State::Broken => status_shared.set(Phase::Failed),
-                _ => {}
+    register(
+        tokio::spawn(async move {
+            let _keep_alive = service; // the service stops when its last handle drops
+            while let Some(status) = status_events.next().await {
+                match status.state() {
+                    State::DegradedReachable | State::Running => status_shared.set(Phase::Ready),
+                    State::Broken => status_shared.set(Phase::Failed),
+                    _ => {}
+                }
             }
-        }
-    });
+        })
+        .abort_handle(),
+    );
 
     let streams = handle_rend_requests(requests);
     futures::pin_mut!(streams);
@@ -461,7 +595,9 @@ async fn run(
             continue;
         };
         // A full queue drops the new stream: bounded memory beats serving a flood.
-        let _ = incoming.try_send(StreamTransport::new(handle.clone(), stream));
+        let link = StreamTransport::new(handle.clone(), stream)
+            .keep_alive(Arc::clone(&runtime) as Arc<dyn Any + Send + Sync>);
+        let _ = incoming.try_send((Instant::now(), link));
     }
     Ok(())
 }
@@ -749,6 +885,33 @@ mod frame_tests {
         assert_eq!(a.handshake_deadline(), Duration::from_secs(60));
     }
 
+    #[test]
+    fn a_link_keeps_working_after_the_node_that_made_it_lets_go_of_its_runtime() {
+        // The link holds the runtime alive. Without that, dropping the node's runtime
+        // while a session is open made the next poll panic, and a panic aborts the app.
+        let owned = Arc::new(OwnedRuntime::new(runtime()));
+        let (a, b) = tokio::io::duplex(1024 * 1024);
+        let keep: Arc<dyn std::any::Any + Send + Sync> = owned.clone();
+        let a_link = StreamTransport::new(owned.handle(), a.compat()).keep_alive(Arc::clone(&keep));
+        let b_link = StreamTransport::new(owned.handle(), b.compat()).keep_alive(keep);
+        drop(owned); // the node lets go; the links still hold it
+        a_link.send(b"still alive").unwrap();
+        assert_eq!(b_link.receive().unwrap().unwrap(), b"still alive");
+    }
+
+    #[test]
+    fn dropping_the_last_runtime_reference_inside_async_code_does_not_panic() {
+        // Tokio panics if a runtime is dropped from inside a runtime. A link can be the last
+        // holder and be dropped from a worker thread, so the owner must not block.
+        let owned = Arc::new(OwnedRuntime::new(runtime()));
+        let other = runtime();
+        let moved = Arc::clone(&owned);
+        drop(owned);
+        other.block_on(async move {
+            drop(moved);
+        });
+    }
+
     // Reads on the raw end to check what the framed side actually put on the wire.
     #[test]
     fn the_wire_format_is_a_four_byte_big_endian_length_then_the_body() {
@@ -880,5 +1043,45 @@ mod node_tests {
             "expected a key file among {files:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn shutting_a_node_down_makes_a_waiting_accept_return_at_once() {
+        // Stopping Tor must not leave accept workers blocked for their full timeout while
+        // they keep the old node alive.
+        let dir = temp_state_dir("shutdown");
+        let node = TorNode::start(&dir, &[0x11u8; 32], expected_onion(&[0x11u8; 32])).unwrap();
+        let waiter = {
+            let node = Arc::clone(&node);
+            std::thread::spawn(move || {
+                let began = Instant::now();
+                let result = node.accept(Duration::from_secs(30)).map(|_| ());
+                (result, began.elapsed())
+            })
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        node.shutdown();
+        let (result, waited) = waiter.join().unwrap();
+        assert_eq!(result, Err(TransportError::Closed));
+        assert!(
+            waited < Duration::from_secs(5),
+            "accept kept waiting: {waited:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stopped_node_refuses_to_connect() {
+        let dir = temp_state_dir("stopped");
+        let node = TorNode::start(&dir, &[0x12u8; 32], expected_onion(&[0x12u8; 32])).unwrap();
+        node.shutdown();
+        let address = onion::address(&expected_onion(&[0x13u8; 32]));
+        assert!(node.connect(&address).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn expected_onion(seed: &[u8; 32]) -> [u8; 32] {
+        crate::handshake::Identity::from_secrets(&[1u8; 32], &[2u8; 64], seed)
+            .1
+            .onion
     }
 }

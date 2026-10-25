@@ -18,10 +18,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.sovereign.mesh.SovereignApp
 import org.sovereign.mesh.core.torStatusText
 
@@ -29,6 +32,7 @@ import org.sovereign.mesh.core.torStatusText
 fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: () -> Unit) {
     val peers = SovereignApp.core.peers()
     var confirmDelete by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(
@@ -62,7 +66,8 @@ fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: (
             DeleteIdentityDialog(
                 onConfirm = {
                     confirmDelete = false
-                    SovereignApp.deleteIdentity()
+                    // Stopping Tor and deleting its folder can take a moment: not on the UI thread.
+                    scope.launch(Dispatchers.IO) { SovereignApp.deleteIdentity() }
                 },
                 onDismiss = { confirmDelete = false },
             )

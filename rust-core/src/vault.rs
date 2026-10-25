@@ -88,7 +88,17 @@ pub(crate) fn encode_contents(
     identity: &Identity,
     pins: &HashMap<String, IdentityPublic>,
 ) -> Result<Zeroizing<Vec<u8>>, CoreError> {
-    let mut out = Zeroizing::new(Vec::new());
+    // Sized exactly up front: a Vec that grows frees its old buffer without wiping it,
+    // which would leave copies of the identity secrets in freed memory.
+    let size = 32
+        + MLKEM_SEED_LEN
+        + ONION_SEED_LEN
+        + 2
+        + pins
+            .iter()
+            .map(|(label, p)| 2 + label.len() + 32 + 32 + 2 + p.mlkem_ek.len())
+            .sum::<usize>();
+    let mut out = Zeroizing::new(Vec::with_capacity(size));
     out.extend_from_slice(&identity.x25519_secret().0);
     out.extend_from_slice(identity.mlkem_seed());
     out.extend_from_slice(identity.onion_seed());
@@ -246,5 +256,17 @@ mod tests {
             let value = Probe::<Key32>::DEBUG;
             assert!(!value);
         }
+    }
+    #[test]
+    fn the_contents_buffer_is_sized_exactly_so_it_never_reallocates() {
+        // A growing Vec frees its old buffer without wiping it, which would leave copies of
+        // the identity secrets in freed memory. An exact allocation never moves.
+        let (identity, _) = Identity::generate();
+        let (_o, other_pub) = Identity::generate();
+        let mut pins = HashMap::new();
+        pins.insert("bob".to_string(), other_pub.clone());
+        pins.insert("carol".to_string(), other_pub);
+        let bytes = encode_contents(&identity, &pins).unwrap();
+        assert_eq!(bytes.capacity(), bytes.len());
     }
 }
