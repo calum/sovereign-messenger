@@ -4,7 +4,7 @@ Guidance for AI coding assistants working in this repository.
 
 ## What this project is
 
-An experimental, peer-to-peer, RAM-only Android messenger for a closed group of up to five people. Rust core (`rust-core/`) does the cryptography and state. Kotlin + Jetpack Compose (`app/`) does the UI. Read `README.md` for the status table and `PLAN.md` for what is left.
+An experimental, peer-to-peer, RAM-only Android messenger for a closed group of up to five people. Rust core (`rust-core/`) does the cryptography and state. Kotlin + Jetpack Compose (`app/`) does the UI. Read `README.md` for the overview, `docs/status.md` for the detailed status and security table, and `PLAN.md` for what is left.
 
 ## Hard rules
 

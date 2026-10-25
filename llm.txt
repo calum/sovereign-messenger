@@ -56,4 +56,4 @@ COMMANDS
 - Windows: copy mise.local.toml.example to mise.local.toml (NDK and JDK paths); the native build runs under Git Bash
 - Windows: JAVA_HOME must point at JDK 17; system JDK 11 is too old
 
-SEE ALSO: README.md (status and setup), PLAN.md (checklist, kept current), CLAUDE.md (rules for AI assistants)
+SEE ALSO: README.md (overview and diagrams), docs/status.md (detailed status), docs/setup.md (setup and building), PLAN.md (checklist, kept current), CLAUDE.md (rules for AI assistants)
