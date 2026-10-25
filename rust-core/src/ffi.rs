@@ -464,22 +464,25 @@ impl Messenger {
         let link: Arc<dyn Transport> = Arc::new(
             TcpTransport::connect(&addr, CONNECT_TIMEOUT).map_err(|_| FacadeError::Network)?,
         );
-        // The responder speaks first with its challenge; the handshake is built on it.
-        let challenge = wire::receive_challenge(link.as_ref())?;
-        let (init, root) = {
-            let st = self.lock()?;
-            let peer = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
-            handshake::initiate(&st.identity, peer, &challenge)?
-        };
-        wire::send_handshake(link.as_ref(), &init)?;
-        let session = session_for(
-            &root,
-            INITIATOR_TO_RESPONDER,
-            RESPONDER_TO_INITIATOR,
-            Some(link),
+        self.initiate_on_link(peer_id, link)
+    }
+
+    /// Binds `bind_addr` and waits up to `timeout_secs` for one connection from any
+    /// pinned contact. Returns the label of the contact whose long-term key the caller
+    /// proved in the handshake; a caller whose key is not pinned is refused with
+    /// `NotPinned` and no session is made. Blocks the calling thread.
+    pub fn listen_for_any_peer(
+        &self,
+        bind_addr: String,
+        timeout_secs: u32,
+    ) -> Result<String, FacadeError> {
+        let listener = TcpListener::bind(&bind_addr).map_err(|_| FacadeError::Network)?;
+        let link: Arc<dyn Transport> = Arc::new(
+            TcpTransport::accept(&listener, Duration::from_secs(u64::from(timeout_secs)))
+                .map_err(|_| FacadeError::Network)?,
         );
-        self.lock()?.sessions.insert(peer_id, Arc::new(session));
-        Ok(())
+        drop(listener); // one peer per listen call
+        self.respond_on_link(link, None)
     }
 
     /// Binds `bind_addr` and waits up to `timeout_secs` for one peer to connect.
@@ -734,13 +737,59 @@ impl Messenger {
                 .map_err(|_| FacadeError::Network)?,
         );
         drop(listener); // one peer per listen call
-                        // A fresh challenge per connection, sent before the initiator's handshake.
-                        // The handshake must answer this one, so a captured handshake from an earlier
-                        // connection fails its tag here and the live session is not replaced.
+        self.respond_on_link(link, Some(&peer_id)).map(|_| ())
+    }
+
+    /// Initiator side of the handshake over an open link to the contact pinned as
+    /// `peer_id`. The link stays open for the session. Shared by every carrier.
+    pub(crate) fn initiate_on_link(
+        &self,
+        peer_id: String,
+        link: Arc<dyn Transport>,
+    ) -> Result<(), FacadeError> {
+        // The responder speaks first with its challenge; the handshake is built on it.
+        let challenge = wire::receive_challenge(link.as_ref())?;
+        let (init, root) = {
+            let st = self.lock()?;
+            let peer = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
+            handshake::initiate(&st.identity, peer, &challenge)?
+        };
+        wire::send_handshake(link.as_ref(), &init)?;
+        let session = session_for(
+            &root,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+            Some(link),
+        );
+        self.lock()?.sessions.insert(peer_id, Arc::new(session));
+        Ok(())
+    }
+
+    /// Responder side of the handshake over an open link. With `expected` set, the
+    /// caller must be that pinned contact. With `None`, the caller is whichever pinned
+    /// contact owns the long-term key in its handshake, and an unknown key is `NotPinned`.
+    /// Returns the contact's label. Shared by every carrier.
+    pub(crate) fn respond_on_link(
+        &self,
+        link: Arc<dyn Transport>,
+        expected: Option<&str>,
+    ) -> Result<String, FacadeError> {
+        // A fresh challenge per connection, sent before the initiator's handshake.
+        // The handshake must answer this one, so a captured handshake from an earlier
+        // connection fails its tag here and the live session is not replaced.
         let challenge = handshake::new_challenge();
         wire::send_challenge(link.as_ref(), &challenge)?;
         let init = wire::receive_handshake(link.as_ref())?;
         let mut st = self.lock()?;
+        let peer_id = match expected {
+            Some(label) => label.to_owned(),
+            None => st
+                .pins
+                .iter()
+                .find(|(_, pinned)| pinned.x25519 == init.initiator_x25519)
+                .map(|(label, _)| label.clone())
+                .ok_or(FacadeError::NotPinned)?,
+        };
         let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
         let root = handshake::respond(&st.identity, &pinned, &init, &challenge)?;
         let session = session_for(
@@ -749,8 +798,8 @@ impl Messenger {
             INITIATOR_TO_RESPONDER,
             Some(link),
         );
-        st.sessions.insert(peer_id, Arc::new(session));
-        Ok(())
+        st.sessions.insert(peer_id.clone(), Arc::new(session));
+        Ok(peer_id)
     }
 }
 
