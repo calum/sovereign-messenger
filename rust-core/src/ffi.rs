@@ -23,6 +23,7 @@ use crate::apk_transfer;
 use crate::double_ratchet::{DoubleRatchet, Header, Message};
 use crate::error::CoreError;
 use crate::handshake::{self, Identity, IdentityPublic, CHALLENGE_LEN};
+use crate::onion;
 use crate::pairing;
 use crate::secret::{Key32, SecretBytes};
 use crate::store::Store;
@@ -36,6 +37,8 @@ use crate::wire::{self, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
 pub struct PublicIdentity {
     pub x25519: Vec<u8>,
     pub mlkem_ek: Vec<u8>,
+    /// Ed25519 public key of the onion service (32 bytes).
+    pub onion: Vec<u8>,
 }
 
 /// First handshake message, sent by the initiator. Public values only.
@@ -261,7 +264,21 @@ impl Messenger {
         Ok(PublicIdentity {
             x25519: st.public.x25519.to_vec(),
             mlkem_ek: st.public.mlkem_ek.clone(),
+            onion: st.public.onion.to_vec(),
         })
+    }
+
+    /// This identity's v3 onion address, `<56 characters>.onion`. Stable across restarts
+    /// because its key is part of the vault. Public: it is also in the QR code.
+    pub fn own_onion_address(&self) -> Result<String, FacadeError> {
+        let st = self.lock()?;
+        Ok(onion::address(&st.public.onion))
+    }
+
+    /// The onion address pinned for `peer_id` from their scanned QR code, if any.
+    pub fn pinned_onion_address(&self, peer_id: String) -> Result<Option<String>, FacadeError> {
+        let st = self.lock()?;
+        Ok(st.pins.get(&peer_id).map(|p| onion::address(&p.onion)))
     }
 
     /// Payload bytes for this identity's QR code. Rust builds the bytes; Kotlin only renders them.
@@ -780,6 +797,7 @@ fn to_core_public(p: PublicIdentity) -> Result<IdentityPublic, FacadeError> {
     Ok(IdentityPublic {
         x25519: to_array32(&p.x25519)?,
         mlkem_ek: p.mlkem_ek,
+        onion: to_array32(&p.onion)?,
     })
 }
 

@@ -8,6 +8,7 @@ pub mod double_ratchet;
 pub mod error;
 pub mod ffi;
 pub mod handshake;
+pub mod onion;
 pub mod pairing;
 pub mod ratchet;
 pub mod secret;

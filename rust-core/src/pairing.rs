@@ -16,9 +16,9 @@ use crate::error::CoreError;
 use crate::handshake::IdentityPublic;
 
 const MAGIC: &[u8; 4] = b"SMQR";
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const MLKEM768_EK_LEN: usize = 1184;
-const FINGERPRINT_DOMAIN: &[u8] = b"sovereign-p2p v1 fingerprint";
+const FINGERPRINT_DOMAIN: &[u8] = b"sovereign-p2p v2 fingerprint";
 
 /// Upper bound on the connection hint, so a QR code stays small and scannable.
 pub const MAX_HINT_LEN: usize = 64;
@@ -29,10 +29,11 @@ pub fn encode(public: &IdentityPublic, hint: &str) -> Result<Vec<u8>, CoreError>
     if public.mlkem_ek.len() != MLKEM768_EK_LEN || !is_valid_hint(hint) {
         return Err(CoreError::Malformed);
     }
-    let mut out = Vec::with_capacity(4 + 1 + 32 + MLKEM768_EK_LEN + 1 + hint.len());
+    let mut out = Vec::with_capacity(4 + 1 + 32 + 32 + MLKEM768_EK_LEN + 1 + hint.len());
     out.extend_from_slice(MAGIC);
     out.push(VERSION);
     out.extend_from_slice(&public.x25519);
+    out.extend_from_slice(&public.onion);
     out.extend_from_slice(&public.mlkem_ek);
     out.push(hint.len() as u8);
     out.extend_from_slice(hint.as_bytes());
@@ -40,9 +41,10 @@ pub fn encode(public: &IdentityPublic, hint: &str) -> Result<Vec<u8>, CoreError>
 }
 
 /// Parses a scanned payload. Rejects bad magic, unknown version, wrong length,
-/// trailing bytes, an all-zero X25519 key (a low-order point), and a bad hint.
+/// trailing bytes, an all-zero X25519 key (a low-order point), an onion key that is
+/// not a valid, non-weak Ed25519 point, and a bad hint. Version 1 (no onion key) is refused.
 pub fn decode(bytes: &[u8]) -> Result<(IdentityPublic, String), CoreError> {
-    let fixed = 4 + 1 + 32 + MLKEM768_EK_LEN + 1;
+    let fixed = 4 + 1 + 32 + 32 + MLKEM768_EK_LEN + 1;
     if bytes.len() < fixed || &bytes[..4] != MAGIC || bytes[4] != VERSION {
         return Err(CoreError::Malformed);
     }
@@ -51,7 +53,13 @@ pub fn decode(bytes: &[u8]) -> Result<(IdentityPublic, String), CoreError> {
     if x25519 == [0u8; 32] {
         return Err(CoreError::Malformed);
     }
-    let mlkem_ek = bytes[37..37 + MLKEM768_EK_LEN].to_vec();
+    let mut onion = [0u8; 32];
+    onion.copy_from_slice(&bytes[37..69]);
+    match ed25519_dalek::VerifyingKey::from_bytes(&onion) {
+        Ok(key) if !key.is_weak() => {}
+        _ => return Err(CoreError::Malformed),
+    }
+    let mlkem_ek = bytes[69..69 + MLKEM768_EK_LEN].to_vec();
 
     let hint_len = bytes[fixed - 1] as usize;
     if hint_len > MAX_HINT_LEN || bytes.len() != fixed + hint_len {
@@ -61,7 +69,14 @@ pub fn decode(bytes: &[u8]) -> Result<(IdentityPublic, String), CoreError> {
     if !is_valid_hint(hint) {
         return Err(CoreError::Malformed);
     }
-    Ok((IdentityPublic { x25519, mlkem_ek }, hint.to_owned()))
+    Ok((
+        IdentityPublic {
+            x25519,
+            mlkem_ek,
+            onion,
+        },
+        hint.to_owned(),
+    ))
 }
 
 /// Short human-checkable label for an identity, shown next to a pinned peer.
@@ -70,6 +85,7 @@ pub fn fingerprint(public: &IdentityPublic) -> String {
     let mut h = Sha256::new();
     h.update(FINGERPRINT_DOMAIN);
     h.update(public.x25519);
+    h.update(public.onion);
     h.update(&public.mlkem_ek);
     let digest = h.finalize();
     let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
@@ -246,7 +262,7 @@ mod tests {
         magic[0] ^= 1;
         assert_eq!(decode(&magic), Err(CoreError::Malformed));
         let mut version = good;
-        version[4] = 2;
+        version[4] = VERSION + 1;
         assert_eq!(decode(&version), Err(CoreError::Malformed));
     }
 
@@ -374,5 +390,58 @@ mod tests {
     fn old_single_code_payload_is_refused_not_misread() {
         let payload = encode(&sample(), "h").unwrap();
         assert_eq!(Assembler::new().add(&payload), Err(CoreError::Malformed));
+    }
+
+    #[test]
+    fn payload_carries_the_onion_key() {
+        let public = sample();
+        let (parsed, _) = decode(&encode(&public, "").unwrap()).unwrap();
+        assert_eq!(parsed.onion, public.onion);
+    }
+
+    #[test]
+    fn version_one_payload_without_an_onion_key_is_refused() {
+        // The old layout: magic, version 1, x25519, ML-KEM key, hint length 0.
+        let public = sample();
+        let mut v1 = Vec::new();
+        v1.extend_from_slice(MAGIC);
+        v1.push(1);
+        v1.extend_from_slice(&public.x25519);
+        v1.extend_from_slice(&public.mlkem_ek);
+        v1.push(0);
+        assert_eq!(decode(&v1), Err(CoreError::Malformed));
+    }
+
+    #[test]
+    fn weak_or_invalid_onion_keys_are_refused() {
+        let public = sample();
+        // All zero is a valid curve point of tiny order: refused as weak.
+        let mut zero = public.clone();
+        zero.onion = [0u8; 32];
+        assert_eq!(
+            decode(&encode(&zero, "").unwrap()),
+            Err(CoreError::Malformed)
+        );
+        // Find an encoding that is not a point on the curve at all.
+        let off_curve = (2u8..=255)
+            .map(|b| [b; 32])
+            .find(|k| ed25519_dalek::VerifyingKey::from_bytes(k).is_err())
+            .expect("some constant encoding is off the curve");
+        let mut bad = public;
+        bad.onion = off_curve;
+        assert_eq!(
+            decode(&encode(&bad, "").unwrap()),
+            Err(CoreError::Malformed)
+        );
+    }
+
+    #[test]
+    fn fingerprint_covers_the_onion_key() {
+        // The fingerprint is what two people compare in person, so a swapped
+        // onion address must change it.
+        let a = sample();
+        let mut b = a.clone();
+        b.onion = sample().onion;
+        assert_ne!(fingerprint(&a), fingerprint(&b));
     }
 }

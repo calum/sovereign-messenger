@@ -255,3 +255,24 @@ fn unknown_version_byte_is_refused() {
     blob[0] = 0xFF;
     assert!(vault::open(&key, &blob).is_err());
 }
+
+#[test]
+fn the_onion_address_survives_a_restore_and_matches_the_pinned_copy() {
+    let (alice, bob) = alice_with_bob_pinned();
+    let restored =
+        Messenger::restore(alice.data_key().unwrap(), alice.export_vault().unwrap()).unwrap();
+    assert_eq!(
+        restored.own_onion_address().unwrap(),
+        alice.own_onion_address().unwrap()
+    );
+    assert!(restored.own_onion_address().unwrap().ends_with(".onion"));
+    // Bob's address as Alice pinned it is the address Bob reports for himself.
+    assert_eq!(
+        restored.pinned_onion_address("bob".into()).unwrap(),
+        Some(bob.own_onion_address().unwrap())
+    );
+    assert_eq!(
+        restored.pinned_onion_address("nobody".into()).unwrap(),
+        None
+    );
+}

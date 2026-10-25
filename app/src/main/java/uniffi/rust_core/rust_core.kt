@@ -701,6 +701,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_own_identity(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_own_onion_address(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_own_pairing_parts(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_own_pairing_payload(
@@ -708,6 +710,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_rust_core_checksum_method_messenger_peers(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_pin_fingerprint(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_pinned_onion_address(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_pinned_peers(
     ): Int
@@ -805,6 +809,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_own_identity(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_own_onion_address(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_own_pairing_parts(`ptr`: Long,`connectionHint`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_own_pairing_payload(`ptr`: Long,`connectionHint`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -812,6 +818,8 @@ internal object UniffiLib {
     external fun uniffi_rust_core_fn_method_messenger_peers(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_pin_fingerprint(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_pinned_onion_address(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_pinned_peers(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1009,6 +1017,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_own_identity() and 0xFFFF) != 23808) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_own_onion_address() and 0xFFFF) != 5359) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_method_messenger_own_pairing_parts() and 0xFFFF) != 49097) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1019,6 +1030,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_pin_fingerprint() and 0xFFFF) != 34044) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_pinned_onion_address() and 0xFFFF) != 50208) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_pinned_peers() and 0xFFFF) != 23966) {
@@ -1588,6 +1602,12 @@ public interface MessengerInterface {
     fun `ownIdentity`(): PublicIdentity
     
     /**
+     * This identity's v3 onion address, `<56 characters>.onion`. Stable across restarts
+     * because its key is part of the vault. Public: it is also in the QR code.
+     */
+    fun `ownOnionAddress`(): kotlin.String
+    
+    /**
      * The QR parts for this identity, in order. Each part is one QR code; the
      * scanner must collect all of them (see `PairingAssembler`) before pinning.
      */
@@ -1607,6 +1627,11 @@ public interface MessengerInterface {
      * Fingerprint of the identity pinned for `peer_id`, if any.
      */
     fun `pinFingerprint`(`peerId`: kotlin.String): kotlin.String?
+    
+    /**
+     * The onion address pinned for `peer_id` from their scanned QR code, if any.
+     */
+    fun `pinnedOnionAddress`(`peerId`: kotlin.String): kotlin.String?
     
     /**
      * Peer labels with a pinned identity, sorted.
@@ -2057,6 +2082,24 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
+     * This identity's v3 onion address, `<56 characters>.onion`. Stable across restarts
+     * because its key is part of the vault. Public: it is also in the QR code.
+     */
+    @Throws(FacadeException::class)override fun `ownOnionAddress`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_own_onion_address(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * The QR parts for this identity, in order. Each part is one QR code; the
      * scanner must collect all of them (see `PairingAssembler`) before pinning.
      */
@@ -2118,6 +2161,24 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     callWithHandle {
     uniffiRustCallWithError(FacadeException) { _status ->
     UniffiLib.uniffi_rust_core_fn_method_messenger_pin_fingerprint(
+        it,
+        
+        FfiConverterString.lower(`peerId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * The onion address pinned for `peer_id` from their scanned QR code, if any.
+     */
+    @Throws(FacadeException::class)override fun `pinnedOnionAddress`(`peerId`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_pinned_onion_address(
         it,
         
         FfiConverterString.lower(`peerId`),_status)
@@ -2905,6 +2966,11 @@ data class PublicIdentity (
     var `x25519`: kotlin.ByteArray
     , 
     var `mlkemEk`: kotlin.ByteArray
+    , 
+    /**
+     * Ed25519 public key of the onion service (32 bytes).
+     */
+    var `onion`: kotlin.ByteArray
     
 ){
     
@@ -2923,17 +2989,20 @@ public object FfiConverterTypePublicIdentity: FfiConverterRustBuffer<PublicIdent
         return PublicIdentity(
             FfiConverterByteArray.read(buf),
             FfiConverterByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
         )
     }
 
     override fun allocationSize(value: PublicIdentity) = (
             FfiConverterByteArray.allocationSize(value.`x25519`) +
-            FfiConverterByteArray.allocationSize(value.`mlkemEk`)
+            FfiConverterByteArray.allocationSize(value.`mlkemEk`) +
+            FfiConverterByteArray.allocationSize(value.`onion`)
     )
 
     override fun write(value: PublicIdentity, buf: ByteBuffer) {
             FfiConverterByteArray.write(value.`x25519`, buf)
             FfiConverterByteArray.write(value.`mlkemEk`, buf)
+            FfiConverterByteArray.write(value.`onion`, buf)
     }
 }
 

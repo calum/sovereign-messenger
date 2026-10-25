@@ -18,7 +18,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::CoreError;
-use crate::handshake::{Identity, IdentityPublic, MLKEM_SEED_LEN};
+use crate::handshake::{Identity, IdentityPublic, MLKEM_SEED_LEN, ONION_SEED_LEN};
 use crate::secret::{Key32, SecretBytes};
 
 /// Format version of a sealed vault. An unknown version is refused, not guessed at.
@@ -91,6 +91,7 @@ pub(crate) fn encode_contents(
     let mut out = Zeroizing::new(Vec::new());
     out.extend_from_slice(&identity.x25519_secret().0);
     out.extend_from_slice(identity.mlkem_seed());
+    out.extend_from_slice(identity.onion_seed());
     let count = u16::try_from(pins.len()).map_err(|_| CoreError::Malformed)?;
     out.extend_from_slice(&count.to_be_bytes());
     let mut labels: Vec<&String> = pins.keys().collect();
@@ -101,6 +102,7 @@ pub(crate) fn encode_contents(
         out.extend_from_slice(&id_len.to_be_bytes());
         out.extend_from_slice(label.as_bytes());
         out.extend_from_slice(&public.x25519);
+        out.extend_from_slice(&public.onion);
         let ek_len = u16::try_from(public.mlkem_ek.len()).map_err(|_| CoreError::Malformed)?;
         out.extend_from_slice(&ek_len.to_be_bytes());
         out.extend_from_slice(&public.mlkem_ek);
@@ -118,9 +120,12 @@ pub(crate) fn decode_contents(bytes: &[u8]) -> Result<Contents, CoreError> {
     let mut x25519 = Key32(r.take(32)?.try_into().map_err(|_| CoreError::Malformed)?);
     let mut seed = [0u8; MLKEM_SEED_LEN];
     seed.copy_from_slice(r.take(MLKEM_SEED_LEN)?);
-    let (identity, public) = Identity::from_secrets(&x25519.0, &seed);
+    let mut onion_seed = [0u8; ONION_SEED_LEN];
+    onion_seed.copy_from_slice(r.take(ONION_SEED_LEN)?);
+    let (identity, public) = Identity::from_secrets(&x25519.0, &seed, &onion_seed);
     x25519.zeroize();
     seed.zeroize();
+    onion_seed.zeroize();
 
     let count = r.u16()?;
     let mut pins = HashMap::new();
@@ -130,13 +135,21 @@ pub(crate) fn decode_contents(bytes: &[u8]) -> Result<Contents, CoreError> {
             .map_err(|_| CoreError::Malformed)?
             .to_owned();
         let x25519: [u8; 32] = r.take(32)?.try_into().map_err(|_| CoreError::Malformed)?;
+        let onion: [u8; 32] = r.take(32)?.try_into().map_err(|_| CoreError::Malformed)?;
         let ek_len = r.u16()? as usize;
         if ek_len != MLKEM768_EK_LEN {
             return Err(CoreError::Malformed);
         }
         let mlkem_ek = r.take(ek_len)?.to_vec();
         if pins
-            .insert(label, IdentityPublic { x25519, mlkem_ek })
+            .insert(
+                label,
+                IdentityPublic {
+                    x25519,
+                    mlkem_ek,
+                    onion,
+                },
+            )
             .is_some()
         {
             return Err(CoreError::Malformed);
@@ -203,6 +216,7 @@ mod tests {
             IdentityPublic {
                 x25519: [1u8; 32],
                 mlkem_ek: vec![0u8; 10],
+                onion: [2u8; 32],
             },
         );
         let bytes = encode_contents(&identity, &pins).unwrap();

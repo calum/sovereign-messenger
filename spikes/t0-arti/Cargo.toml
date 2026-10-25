@@ -10,6 +10,10 @@ publish = false
 name = "t0-arti"
 path = "src/main.rs"
 
+[[bin]]
+name = "addrvec"
+path = "src/bin/addrvec.rs"
+
 [dependencies]
 # Pinned to the latest stable 0.x on crates.io at spike time (0.47.0).
 # rustls instead of native-tls so the same feature set can target Android later.
@@ -19,6 +23,8 @@ futures = "0.3"
 anyhow = "1"
 tor-cell = "=0.47.0"
 tor-hsservice = "=0.47.0"
+tor-hscrypto = "=0.47.0"
+tor-llcrypto = "=0.47.0"
 tor-proto = "=0.47.0"
 safelog = "=0.10.0"
 libsqlite3-sys = { version = "=0.38.2", features = ["bundled"] }

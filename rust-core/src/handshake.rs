@@ -48,10 +48,15 @@ pub const TAG_LEN: usize = 32;
 pub struct IdentityPublic {
     pub x25519: [u8; 32],
     pub mlkem_ek: Vec<u8>,
+    /// Ed25519 public key of this identity's onion service. The v3 onion address is
+    /// derived from it (`onion::address`). Public: it travels in the QR code.
+    pub onion: [u8; 32],
 }
 
 /// Length of the ML-KEM-768 key seed, in bytes. The decapsulation key is derived from it.
 pub const MLKEM_SEED_LEN: usize = 64;
+/// Length of the onion service key seed, in bytes (an Ed25519 seed).
+pub const ONION_SEED_LEN: usize = 32;
 
 /// Long-term identity secret. In RAM while the app runs; it reaches flash only
 /// sealed under the data key (`vault`), and never in plaintext.
@@ -61,6 +66,10 @@ pub struct Identity {
     /// Kept so the identity can be sealed into the vault and rebuilt after a restart.
     /// `SecretBytes` zeroizes it on drop.
     mlkem_seed: SecretBytes,
+    /// Seed of the onion service's Ed25519 identity key. Random and independent of the
+    /// other secrets, so the onion address reveals nothing about them. Sealed in the
+    /// vault with them; the Tor layer rebuilds the service key from it in memory.
+    onion_seed: SecretBytes,
 }
 
 impl Identity {
@@ -69,9 +78,12 @@ impl Identity {
         random_fill(&mut x25519);
         let mut seed = [0u8; MLKEM_SEED_LEN];
         random_fill(&mut seed);
-        let out = Self::from_secrets(&x25519, &seed);
+        let mut onion_seed = [0u8; ONION_SEED_LEN];
+        random_fill(&mut onion_seed);
+        let out = Self::from_secrets(&x25519, &seed, &onion_seed);
         x25519.zeroize();
         seed.zeroize();
+        onion_seed.zeroize();
         out
     }
 
@@ -80,18 +92,24 @@ impl Identity {
     pub fn from_secrets(
         x25519: &[u8; 32],
         mlkem_seed: &[u8; MLKEM_SEED_LEN],
+        onion_seed: &[u8; ONION_SEED_LEN],
     ) -> (Self, IdentityPublic) {
         let x25519 = StaticSecret::from(*x25519);
         let (dk, ek) = MlKem768::from_seed(&(*mlkem_seed).into());
+        let onion = ed25519_dalek::SigningKey::from_bytes(onion_seed)
+            .verifying_key()
+            .to_bytes();
         let public = IdentityPublic {
             x25519: PublicKey::from(&x25519).to_bytes(),
             mlkem_ek: ek.to_bytes().to_vec(),
+            onion,
         };
         (
             Self {
                 x25519,
                 mlkem_dk: dk,
                 mlkem_seed: SecretBytes::new(mlkem_seed),
+                onion_seed: SecretBytes::new(onion_seed),
             },
             public,
         )
@@ -105,6 +123,11 @@ impl Identity {
     /// The ML-KEM seed, for sealing into the vault only.
     pub(crate) fn mlkem_seed(&self) -> &[u8] {
         self.mlkem_seed.expose()
+    }
+
+    /// The onion service key seed, for the vault and for the Tor layer only.
+    pub(crate) fn onion_seed(&self) -> &[u8] {
+        self.onion_seed.expose()
     }
 }
 
@@ -366,10 +389,34 @@ mod tests {
             x25519: StaticSecret::random_from_rng(OsRng),
             mlkem_dk: real.mlkem_dk,
             mlkem_seed: real.mlkem_seed,
+            onion_seed: real.onion_seed,
         };
         assert_eq!(
             respond(&half_wrong, &alice_pub.x25519, &init, &c).err(),
             Some(CoreError::Auth)
         );
+    }
+
+    #[test]
+    fn public_identity_carries_the_onion_key_of_its_seed() {
+        let (_id, public) = Identity::from_secrets(&[1u8; 32], &[2u8; 64], &[3u8; 32]);
+        let expected = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32])
+            .verifying_key()
+            .to_bytes();
+        assert_eq!(public.onion, expected);
+        // The same secrets always rebuild the same public identity.
+        let (_again, same) = Identity::from_secrets(&[1u8; 32], &[2u8; 64], &[3u8; 32]);
+        assert_eq!(public, same);
+        // Only the onion seed differs, so only the onion key differs.
+        let (_other, other) = Identity::from_secrets(&[1u8; 32], &[2u8; 64], &[4u8; 32]);
+        assert_eq!(public.x25519, other.x25519);
+        assert_ne!(public.onion, other.onion);
+    }
+
+    #[test]
+    fn two_generated_identities_have_different_onion_keys() {
+        let (_a, a) = Identity::generate();
+        let (_b, b) = Identity::generate();
+        assert_ne!(a.onion, b.onion);
     }
 }
