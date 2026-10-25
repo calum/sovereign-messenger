@@ -42,6 +42,11 @@ esac
 toolchain_bin="$ndk/toolchains/llvm/prebuilt/$host_tag/bin"
 if [ ! -d "$toolchain_bin" ]; then
   echo "NDK toolchain not found at $toolchain_bin (set ANDROID_NDK_HOME)" >&2
+  if grep -qi microsoft /proc/version 2>/dev/null; then
+    echo "This looks like WSL's bash, which cannot see the Windows NDK. On Windows run it from Git Bash," >&2
+    echo "or through mise (mise run rust:android), which calls Git Bash. Set ANDROID_NDK_HOME to" >&2
+    echo "the NDK folder, for example C:/Users/<you>/AppData/Local/Android/Sdk/ndk/$ndk_version" >&2
+  fi
   exit 1
 fi
 

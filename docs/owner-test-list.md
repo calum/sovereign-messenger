@@ -67,9 +67,20 @@ Status 2026-10-25: the first install crashed at launch because the library was n
 That is fixed. After `git pull` you must rebuild the native library, because a `jniLibs` folder
 from before the fix makes the build stop with a message naming the two files; this is on purpose.
 
-```bash
+One-time setup on Windows (so mise can find the NDK and JDK): copy `mise.local.toml.example` to
+`mise.local.toml`, check the two paths in it, and run `mise trust`. In PowerShell:
+
+```powershell
+Copy-Item mise.local.toml.example mise.local.toml
+notepad mise.local.toml
+mise trust
+```
+
+Then:
+
+```powershell
 git pull
-mise run rust:android
+mise run rust:android      # calls Git Bash itself; WSL's bash is not used
 mise run android:debug
 mise run android:share     # then reinstall on the phone
 ```

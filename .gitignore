@@ -25,3 +25,6 @@ keystore.properties
 
 # Cross-compiled native libraries (build output from rust-core/scripts/build-android.sh)
 app/src/main/jniLibs/
+
+# Per-machine mise settings (copy mise.local.toml.example)
+mise.local.toml

@@ -37,10 +37,14 @@ run = "cargo clean --manifest-path rust-core/Cargo.toml"
 [tasks."rust:android"]
 description = "Cross-compile rust-core for arm64-v8a and x86_64 into app/src/main/jniLibs (needs the NDK)"
 run = "bash rust-core/scripts/build-android.sh"
+# On Windows `bash` on PATH is often WSL's bash, which sees a Linux machine and looks for the NDK
+# under /home. Call Git Bash by its full path instead.
+run_windows = '"%ProgramFiles%\Git\bin\bash.exe" rust-core/scripts/build-android.sh'
 
 [tasks."rust:bindings"]
 description = "Regenerate the UniFFI Kotlin bindings after changing rust-core/src/ffi.rs"
 run = "bash rust-core/scripts/gen-kotlin.sh"
+run_windows = '"%ProgramFiles%\Git\bin\bash.exe" rust-core/scripts/gen-kotlin.sh'
 
 [tasks."android:debug"]
 description = "Build the debug APK"
