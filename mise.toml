@@ -18,6 +18,18 @@ run = [
   "cargo clippy --manifest-path rust-core/Cargo.toml --all-targets -- -D warnings",
 ]
 
+[tasks."rust:test:tor"]
+description = "Run rust-core tests with the Tor feature compiled in (no network needed)"
+run = "cargo test --manifest-path rust-core/Cargo.toml --features tor"
+
+[tasks."rust:lint:tor"]
+description = "Clippy with warnings as errors, Tor feature on"
+run = "cargo clippy --manifest-path rust-core/Cargo.toml --features tor --all-targets -- -D warnings"
+
+[tasks."rust:live"]
+description = "LIVE Tor tests: reach the real Tor network, take minutes, ignored by default"
+run = "cargo test --manifest-path rust-core/Cargo.toml --features tor --test tor_live -- --ignored --nocapture --test-threads=1"
+
 [tasks."rust:clean"]
 description = "Remove rust-core build output"
 run = "cargo clean --manifest-path rust-core/Cargo.toml"
@@ -52,11 +64,11 @@ run = "adb install -r app/build/outputs/apk/debug/app-debug.apk"
 
 [tasks.test]
 description = "Run every test suite"
-depends = ["rust:test", "android:test"]
+depends = ["rust:test", "rust:test:tor", "android:test"]
 
 [tasks.check]
 description = "Lint everything, then run all tests"
-depends = ["rust:lint", "test"]
+depends = ["rust:lint", "rust:lint:tor", "test"]
 
 [tasks.clean]
 description = "Remove all build output"

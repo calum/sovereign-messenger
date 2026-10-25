@@ -5,8 +5,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import org.sovereign.mesh.core.AndroidKeystoreWrapper
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.sovereign.mesh.core.CoreBridge
 import org.sovereign.mesh.core.IdentityVault
+import org.sovereign.mesh.core.TorController
 import org.sovereign.mesh.core.VaultOpen
 import uniffi.rust_core.Messenger
 
@@ -25,8 +30,16 @@ class SovereignApp : Application() {
 
         private lateinit var vault: IdentityVault
 
-        internal fun start(vault: IdentityVault) {
+        /** Keeps Tor and the onion service running for the current identity. */
+        lateinit var tor: TorController
+            private set
+
+        private lateinit var torDir: File
+        private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+        internal fun start(vault: IdentityVault, torDir: File) {
             this.vault = vault
+            this.torDir = torDir
             when (val opened = vault.open()) {
                 is VaultOpen.Ready -> {
                     core = CoreBridge(opened.messenger, vault)
@@ -37,6 +50,8 @@ class SovereignApp : Application() {
                     identityUnreadable = true
                 }
             }
+            tor = TorController(core, torDir)
+            tor.start(appScope)
         }
 
         /**
@@ -44,14 +59,19 @@ class SovereignApp : Application() {
          * identity. Every contact pin is lost and must be paired again in person.
          */
         fun deleteIdentity() {
+            // Tor runs under the old identity's onion address, so it stops first. Its folder
+            // holds only public directory data and guard state, but it goes with the identity.
+            tor.stop()
+            torDir.deleteRecursively()
             vault.delete()
-            start(vault)
+            start(vault, torDir)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         // App-private storage; excluded from backup by data_extraction_rules.xml.
-        start(IdentityVault(filesDir, AndroidKeystoreWrapper()))
+        // Tor's public directory cache and guard state live in app-private files; no key or message does.
+        start(IdentityVault(filesDir, AndroidKeystoreWrapper()), File(filesDir, "tor"))
     }
 }

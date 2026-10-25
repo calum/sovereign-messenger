@@ -675,9 +675,13 @@ internal object IntegrityCheckingUniffiLib {
     }
 
     internal fun ensureInitialized() = Unit
+    external fun uniffi_rust_core_checksum_method_messenger_accept_peer_tor(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_accept_session(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_connect_peer(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_connect_peer_tor(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_data_key(
     ): Int
@@ -690,6 +694,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_rust_core_checksum_method_messenger_history(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_linked_peers(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_listen_for_any_peer(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_listen_for_peer(
     ): Int
@@ -732,6 +738,14 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_rust_core_checksum_method_messenger_send_update(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_start_session(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_tor_role(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_tor_start(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_tor_status(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_tor_stop(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_unpin(
     ): Int
@@ -783,9 +797,13 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_rust_core_fn_constructor_messenger_restore(`dataKey`: RustBuffer.ByValue,`vaultBlob`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
+    external fun uniffi_rust_core_fn_method_messenger_accept_peer_tor(`ptr`: Long,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_accept_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`init`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_connect_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,`addr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_connect_peer_tor(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_data_key(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -798,6 +816,8 @@ internal object UniffiLib {
     external fun uniffi_rust_core_fn_method_messenger_history(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_linked_peers(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_listen_for_any_peer(`ptr`: Long,`bindAddr`: RustBuffer.ByValue,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_listen_for_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,`bindAddr`: RustBuffer.ByValue,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -841,6 +861,14 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_start_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`peer`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_tor_role(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_tor_start(`ptr`: Long,`stateDir`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_tor_status(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_tor_stop(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_rust_core_fn_method_messenger_unpin(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_verify_update(`ptr`: Long,`apk`: RustBuffer.ByValue,`version`: Long,`signature`: RustBuffer.ByValue,`installedVersion`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -978,10 +1006,16 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_accept_peer_tor() and 0xFFFF) != 14691) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_method_messenger_accept_session() and 0xFFFF) != 9393) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_connect_peer() and 0xFFFF) != 47327) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_connect_peer_tor() and 0xFFFF) != 24844) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_data_key() and 0xFFFF) != 64194) {
@@ -1000,6 +1034,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_linked_peers() and 0xFFFF) != 57294) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_listen_for_any_peer() and 0xFFFF) != 57341) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_listen_for_peer() and 0xFFFF) != 38529) {
@@ -1063,6 +1100,18 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_start_session() and 0xFFFF) != 24895) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_tor_role() and 0xFFFF) != 63349) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_tor_start() and 0xFFFF) != 7019) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_tor_status() and 0xFFFF) != 31414) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_tor_stop() and 0xFFFF) != 1821) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_unpin() and 0xFFFF) != 28018) {
@@ -1526,6 +1575,13 @@ public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
 public interface MessengerInterface {
     
     /**
+     * Waits up to `timeout_secs` for a pinned contact to call this identity's onion service,
+     * runs the handshake, and returns the contact's label. A caller whose key is not pinned
+     * is refused (`NotPinned`). Blocks; the app runs it off the UI thread.
+     */
+    fun `acceptPeerTor`(`timeoutSecs`: kotlin.UInt): kotlin.String
+    
+    /**
      * Responder side: derive the same root from the initiator's handshake message.
      * `challenge` must be the one `responder_challenge` issued, and it is spent by
      * this call whatever the outcome. Refuses with `NotPinned` if `peer_id` has no
@@ -1540,6 +1596,13 @@ public interface MessengerInterface {
      * with the identity pinned for `peer_id`. The socket stays open for the session.
      */
     fun `connectPeer`(`peerId`: kotlin.String, `addr`: kotlin.String)
+    
+    /**
+     * Dials the onion address pinned for `peer_id` and runs the handshake with it. Blocks,
+     * possibly for minutes; the app runs it off the UI thread. `NotPinned` for an unpinned
+     * contact, `TorUnavailable` if Tor was not started, `Network` if the peer cannot be reached.
+     */
+    fun `connectPeerTor`(`peerId`: kotlin.String)
     
     /**
      * The vault key, handed out once so Kotlin can wrap it with the Keystore.
@@ -1576,6 +1639,14 @@ public interface MessengerInterface {
      * has no socket and is left out, so it never reads as connected.
      */
     fun `linkedPeers`(): List<kotlin.String>
+    
+    /**
+     * Binds `bind_addr` and waits up to `timeout_secs` for one connection from any
+     * pinned contact. Returns the label of the contact whose long-term key the caller
+     * proved in the handshake; a caller whose key is not pinned is refused with
+     * `NotPinned` and no session is made. Blocks the calling thread.
+     */
+    fun `listenForAnyPeer`(`bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt): kotlin.String
     
     /**
      * Binds `bind_addr` and waits up to `timeout_secs` for one peer to connect.
@@ -1702,6 +1773,31 @@ public interface MessengerInterface {
      * key for a pinned peer.
      */
     fun `startSession`(`peerId`: kotlin.String, `peer`: PublicIdentity, `challenge`: kotlin.ByteArray): HandshakeMessage
+    
+    /**
+     * Whether this phone dials `peer_id` or waits for the call. Two phones that both dial
+     * would each make a session and the second would replace the first, so only the side
+     * with the smaller long-term X25519 key dials. `NotPinned` for an unpinned contact.
+     */
+    fun `torRole`(`peerId`: kotlin.String): TorRole
+    
+    /**
+     * Starts Tor and this identity's onion service in the background and returns at once.
+     * `state_dir` must be app-private storage; it holds only Tor's public directory data
+     * and guard state, never the onion key. Calling it again while a node is running is a
+     * no-op; after a failure it starts a fresh node. `TorUnavailable` in a build without Tor.
+     */
+    fun `torStart`(`stateDir`: kotlin.String)
+    
+    /**
+     * Progress of Tor and the onion service, for the status line. Cheap; safe to poll.
+     */
+    fun `torStatus`(): TorStatus
+    
+    /**
+     * Stops Tor and the onion service. Open Tor links close with it. Harmless if not started.
+     */
+    fun `torStop`()
     
     /**
      * The user has checked the new key in person and accepts it. Drops the pin
@@ -1845,6 +1941,26 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
+     * Waits up to `timeout_secs` for a pinned contact to call this identity's onion service,
+     * runs the handshake, and returns the contact's label. A caller whose key is not pinned
+     * is refused (`NotPinned`). Blocks; the app runs it off the UI thread.
+     */
+    @Throws(FacadeException::class)override fun `acceptPeerTor`(`timeoutSecs`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_accept_peer_tor(
+        it,
+        
+        FfiConverterUInt.lower(`timeoutSecs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Responder side: derive the same root from the initiator's handshake message.
      * `challenge` must be the one `responder_challenge` issued, and it is spent by
      * this call whatever the outcome. Refuses with `NotPinned` if `peer_id` has no
@@ -1881,6 +1997,25 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
         
         FfiConverterString.lower(`peerId`),
         FfiConverterString.lower(`addr`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Dials the onion address pinned for `peer_id` and runs the handshake with it. Blocks,
+     * possibly for minutes; the app runs it off the UI thread. `NotPinned` for an unpinned
+     * contact, `TorUnavailable` if Tor was not started, `Network` if the peer cannot be reached.
+     */
+    @Throws(FacadeException::class)override fun `connectPeerTor`(`peerId`: kotlin.String)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_connect_peer_tor(
+        it,
+        
+        FfiConverterString.lower(`peerId`),_status)
 }
     }
     
@@ -1988,6 +2123,28 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     UniffiLib.uniffi_rust_core_fn_method_messenger_linked_peers(
         it,
         _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Binds `bind_addr` and waits up to `timeout_secs` for one connection from any
+     * pinned contact. Returns the label of the contact whose long-term key the caller
+     * proved in the handshake; a caller whose key is not pinned is refused with
+     * `NotPinned` and no session is made. Blocks the calling thread.
+     */
+    @Throws(FacadeException::class)override fun `listenForAnyPeer`(`bindAddr`: kotlin.String, `timeoutSecs`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_listen_for_any_peer(
+        it,
+        
+        FfiConverterString.lower(`bindAddr`),
+        FfiConverterUInt.lower(`timeoutSecs`),_status)
 }
     }
     )
@@ -2393,6 +2550,79 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Whether this phone dials `peer_id` or waits for the call. Two phones that both dial
+     * would each make a session and the second would replace the first, so only the side
+     * with the smaller long-term X25519 key dials. `NotPinned` for an unpinned contact.
+     */
+    @Throws(FacadeException::class)override fun `torRole`(`peerId`: kotlin.String): TorRole {
+            return FfiConverterTypeTorRole.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_tor_role(
+        it,
+        
+        FfiConverterString.lower(`peerId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Starts Tor and this identity's onion service in the background and returns at once.
+     * `state_dir` must be app-private storage; it holds only Tor's public directory data
+     * and guard state, never the onion key. Calling it again while a node is running is a
+     * no-op; after a failure it starts a fresh node. `TorUnavailable` in a build without Tor.
+     */
+    @Throws(FacadeException::class)override fun `torStart`(`stateDir`: kotlin.String)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_tor_start(
+        it,
+        
+        FfiConverterString.lower(`stateDir`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Progress of Tor and the onion service, for the status line. Cheap; safe to poll.
+     */
+    @Throws(FacadeException::class)override fun `torStatus`(): TorStatus {
+            return FfiConverterTypeTorStatus.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_tor_status(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Stops Tor and the onion service. Open Tor links close with it. Harmless if not started.
+     */
+    @Throws(FacadeException::class)override fun `torStop`()
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_tor_stop(
+        it,
+        _status)
+}
+    }
+    
     
 
     
@@ -3056,6 +3286,47 @@ public object FfiConverterTypeScannedPeer: FfiConverterRustBuffer<ScannedPeer> {
 
 
 /**
+ * Tor progress for the status line. `percent` (0 to 100) is meaningful while bootstrapping.
+ */
+data class TorStatus (
+    var `state`: TorState
+    , 
+    var `percent`: kotlin.UByte
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTorStatus: FfiConverterRustBuffer<TorStatus> {
+    override fun read(buf: ByteBuffer): TorStatus {
+        return TorStatus(
+            FfiConverterTypeTorState.read(buf),
+            FfiConverterUByte.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: TorStatus) = (
+            FfiConverterTypeTorState.allocationSize(value.`state`) +
+            FfiConverterUByte.allocationSize(value.`percent`)
+    )
+
+    override fun write(value: TorStatus, buf: ByteBuffer) {
+            FfiConverterTypeTorState.write(value.`state`, buf)
+            FfiConverterUByte.write(value.`percent`, buf)
+    }
+}
+
+
+
+/**
  * An update whose signature has checked out. Only this type reaches the install step.
  */
 data class VerifiedUpdate (
@@ -3190,6 +3461,11 @@ sealed class FacadeException(message: String): kotlin.Exception(message) {
         
         class Network(message: String) : FacadeException(message)
         
+    /**
+     * This build has no Tor, or Tor has not been started on this messenger.
+     */
+        class TorUnavailable(message: String) : FacadeException(message)
+        
         class Internal(message: String) : FacadeException(message)
         
 
@@ -3214,7 +3490,8 @@ public object FfiConverterTypeFacadeError : FfiConverterRustBuffer<FacadeExcepti
             7 -> FacadeException.NotPinned(FfiConverterString.read(buf))
             8 -> FacadeException.NoLink(FfiConverterString.read(buf))
             9 -> FacadeException.Network(FfiConverterString.read(buf))
-            10 -> FacadeException.Internal(FfiConverterString.read(buf))
+            10 -> FacadeException.TorUnavailable(FfiConverterString.read(buf))
+            11 -> FacadeException.Internal(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
         
@@ -3262,14 +3539,98 @@ public object FfiConverterTypeFacadeError : FfiConverterRustBuffer<FacadeExcepti
                 buf.putInt(9)
                 Unit
             }
-            is FacadeException.Internal -> {
+            is FacadeException.TorUnavailable -> {
                 buf.putInt(10)
+                Unit
+            }
+            is FacadeException.Internal -> {
+                buf.putInt(11)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 
 }
+
+
+
+/**
+ * Which side of a pair dials over Tor. Fixed by the two long-term keys, so both phones
+ * agree without talking: one `Dial`s and the other `Wait`s to be called.
+ */
+
+enum class TorRole {
+    
+    DIAL,
+    WAIT;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTorRole: FfiConverterRustBuffer<TorRole> {
+    override fun read(buf: ByteBuffer) = try {
+        TorRole.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: TorRole) = 4UL
+
+    override fun write(value: TorRole, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Where Tor is in coming up. `NotBuilt` means this build has no Tor at all.
+ */
+
+enum class TorState {
+    
+    NOT_BUILT,
+    STOPPED,
+    STARTING,
+    BOOTSTRAPPING,
+    PUBLISHING,
+    READY,
+    FAILED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTorState: FfiConverterRustBuffer<TorState> {
+    override fun read(buf: ByteBuffer) = try {
+        TorState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: TorState) = 4UL
+
+    override fun write(value: TorState, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 

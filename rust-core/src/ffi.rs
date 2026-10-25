@@ -101,6 +101,14 @@ pub enum TorState {
     Failed,
 }
 
+/// Which side of a pair dials over Tor. Fixed by the two long-term keys, so both phones
+/// agree without talking: one `Dial`s and the other `Wait`s to be called.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum TorRole {
+    Dial,
+    Wait,
+}
+
 /// Tor progress for the status line. `percent` (0 to 100) is meaningful while bootstrapping.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct TorStatus {
@@ -579,6 +587,19 @@ impl Messenger {
             drop(node); // dropped outside the lock: stopping the runtime can take a moment
         }
         Ok(())
+    }
+
+    /// Whether this phone dials `peer_id` or waits for the call. Two phones that both dial
+    /// would each make a session and the second would replace the first, so only the side
+    /// with the smaller long-term X25519 key dials. `NotPinned` for an unpinned contact.
+    pub fn tor_role(&self, peer_id: String) -> Result<TorRole, FacadeError> {
+        let st = self.lock()?;
+        let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
+        Ok(if st.public.x25519 < pinned.x25519 {
+            TorRole::Dial
+        } else {
+            TorRole::Wait
+        })
     }
 
     /// Dials the onion address pinned for `peer_id` and runs the handshake with it. Blocks,

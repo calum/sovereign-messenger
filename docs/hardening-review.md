@@ -119,3 +119,28 @@ Also noted: the frame header is bound as associated data (`ratchet.rs` `aead_sea
 | `cargo test --offline` in `rust-core`, 2026-10-25 docs pass | 155 passed (count unchanged by this pass; doc comments only) |
 
 Not verified: FLAG_SECURE on a device; `mlock` on Android or Linux (F1, F2); the independent cryptography review; any run between two phones; the update send from the Updates screen; the two-code QR scan with a camera.
+
+## 6. Tor metadata review (preliminary, 2026-10-25)
+
+This section is written from the design and the code, not from a measurement. Nothing has run over the real Tor network from the app, so every "an observer cannot" below is a design intent that T4 must check.
+
+**What the design is.** Each phone runs one v3 onion service, with its key built in memory from the identity. Contacts are pinned in person from the QR code, which carries the onion address, so no address is ever sent over a network. A conversation is one onion stream between two phones; the handshake and ratchet run unchanged inside it. There is no exit node, no relay of ours and no server.
+
+**An observer on the phone's network (ISP, Wi-Fi owner, mobile carrier) can learn:**
+- that the phone is using Tor, and when, from the connections to Tor guards;
+- roughly how much traffic flows and when (volume and timing), not which contact it is for;
+- the first-launch directory download, which is large and recognisable.
+
+**They cannot learn, if Tor works as designed:** who the phone talks to, what the contact's address is, or any message content or length beyond what Tor cell padding leaves visible.
+
+**A Tor-level or global observer who sees both ends can** correlate timing and volume between two phones. Tor does not defend against that. A conversation between two always-on phones with short chat messages is easy to correlate. Message length is also visible in ciphertext length, rounded up to Tor's 512-byte cells; the ratchet does not pad.
+
+**Things in this app that weaken it:**
+- The onion address is stable for the life of the identity. Anyone who learns a contact's address can watch whether that service is up. The address is public by design (it is in the QR code).
+- The same-Wi-Fi TCP path is still in the app as a test connection. It reveals both phones' local addresses to the network and is not private. It must not be used for real conversations.
+- The APK transfer is over local Wi-Fi by design and reveals both phones to that network for the minutes it runs. It is done in person.
+- Tor keeps a directory cache and guard state in `filesDir/tor`. They show that Tor was used on this phone to anyone who can read the app's files. They hold no key or message.
+- The first publish of an onion service took about 5.6 minutes in the T0 run, and the service is rebuilt every launch because the in-memory keystore regenerates arti's other keys. During that time the phone cannot be called.
+- Android may stop the app's process in the background. The onion service then goes away until the app is open again, so a contact cannot reach a phone whose app is closed.
+
+**To check in T4:** no LAN address in packet captures while on mobile data with Wi-Fi off; the phone reaches Ready from a cold start and from a warm start; a message sent while the other side is closed is not delivered and not stored; the unreadable-vault and delete flows leave no Tor state behind.

@@ -3,6 +3,8 @@ package org.sovereign.mesh.core
 import uniffi.rust_core.LockReport
 import uniffi.rust_core.Messenger
 import uniffi.rust_core.PairingAssembler
+import uniffi.rust_core.TorRole
+import uniffi.rust_core.TorStatus
 
 /**
  * Kotlin side of the Rust core. The Rust `Messenger` is the only holder of
@@ -84,6 +86,35 @@ class CoreBridge(
     fun newPairingAssembler(): PairingAssembler = PairingAssembler()
 
     fun ownFingerprint(): String = messenger.ownFingerprint()
+
+    /** This phone's onion address. Public; it is also in the QR code. */
+    fun ownOnionAddress(): String = messenger.ownOnionAddress()
+
+    /** The onion address pinned for [peer] from their QR code, or null. */
+    fun pinnedOnionAddress(peer: String): String? = messenger.pinnedOnionAddress(peer)
+
+    /** Tor progress for the status line. Cheap; safe to poll from the UI. */
+    fun torStatus(): TorStatus = messenger.torStatus()
+
+    /** Starts Tor and this phone's onion service in the background. [stateDir] is app-private. */
+    fun startTor(stateDir: String) {
+        messenger.torStart(stateDir)
+    }
+
+    fun stopTor() {
+        messenger.torStop()
+    }
+
+    /** Whether this phone dials [peer] or waits for the call. Only one side of a pair dials. */
+    fun torRole(peer: String): TorRole = messenger.torRole(peer)
+
+    /** Dials [peer]'s onion address and runs the handshake. Blocking, possibly minutes. */
+    fun connectTor(peer: String) {
+        messenger.connectPeerTor(peer)
+    }
+
+    /** Waits for any pinned contact to call, and returns their label. Blocking. */
+    fun acceptTor(timeoutSecs: Int): String = messenger.acceptPeerTor(timeoutSecs.toUInt())
 
     /** Pins a scanned identity under [peer]. A changed key is refused and reported, never applied. */
     fun scanPairing(peer: String, payload: ByteArray): PairingOutcome =

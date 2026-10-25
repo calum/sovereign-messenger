@@ -125,3 +125,36 @@ mod with_the_feature {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[test]
+fn exactly_one_side_of_a_pair_dials() {
+    // Two phones that both dial would each make a session and the second would replace
+    // the first. The rule is fixed by the keys, so both phones reach the same answer.
+    for _ in 0..20 {
+        let a = Messenger::new();
+        let b = Messenger::new();
+        a.scan_pairing("b".into(), b.own_pairing_payload(String::new()).unwrap())
+            .unwrap();
+        b.scan_pairing("a".into(), a.own_pairing_payload(String::new()).unwrap())
+            .unwrap();
+        let a_role = a.tor_role("b".into()).unwrap();
+        let b_role = b.tor_role("a".into()).unwrap();
+        assert_ne!(a_role, b_role, "both sides chose {a_role:?}");
+    }
+}
+
+#[test]
+fn the_role_is_stable_for_the_same_pair() {
+    let (me, them) = paired_with("them");
+    let first = me.tor_role("them".into()).unwrap();
+    assert_eq!(me.tor_role("them".into()).unwrap(), first);
+    let _ = them;
+}
+
+#[test]
+fn the_role_for_an_unpinned_contact_is_an_error() {
+    assert_eq!(
+        Messenger::new().tor_role("nobody".into()),
+        Err(FacadeError::NotPinned)
+    );
+}

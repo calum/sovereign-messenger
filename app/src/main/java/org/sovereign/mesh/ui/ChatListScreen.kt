@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.sovereign.mesh.SovereignApp
+import org.sovereign.mesh.core.torStatusText
 
 @Composable
 fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: () -> Unit) {
@@ -37,6 +38,13 @@ fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: (
             Text(chatListTitle, style = MaterialTheme.typography.titleLarge)
         }
         P2pMeshIndicator(peer = null, modifier = Modifier.padding(top = 4.dp))
+        SovereignApp.tor.snapshot.let {
+            Text(
+                torStatusText(it.state, it.percent),
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
         Button(onClick = onPair, modifier = Modifier.padding(top = 8.dp)) {
             Text("Pair a contact")
         }

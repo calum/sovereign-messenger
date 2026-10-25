@@ -66,3 +66,5 @@ required-features = ["bindgen"]
 [profile.release]
 panic = "abort"
 debug = false
+# Native libraries ship without symbols: the Tor build is about 21 MB with them and 14 MB without.
+strip = "symbols"
