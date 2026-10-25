@@ -1,0 +1,14 @@
+flowchart LR
+  subgraph phone["Your phone"]
+    UI["Kotlin app<br/>screens only, no keys"]
+    subgraph core["Rust core"]
+      HS["Handshake<br/>X25519 + ML-KEM"]
+      RT["Double Ratchet<br/>ChaCha20-Poly1305"]
+      VT["Identity vault<br/>(encrypted)"]
+      TOR["Tor onion service"]
+    end
+    KS["Android Keystore<br/>wraps the vault key"]
+    UI <-->|UniFFI| core
+    VT --- KS
+  end
+  TOR <-->|Tor network| THEM["Your contact's phone<br/>(same app)"]

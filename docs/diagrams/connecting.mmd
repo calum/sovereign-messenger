@@ -1,0 +1,15 @@
+sequenceDiagram
+  participant A as Phone A
+  participant B as Phone B
+  Note over A,B: 1. In person, no network
+  A->>B: scan QR: keys + onion address
+  B->>A: scan QR: keys + onion address
+  Note over A,B: 2. Later, from anywhere
+  A->>A: start Tor, publish onion service
+  B->>B: start Tor, publish onion service
+  A->>B: dial B's onion address over Tor
+  B-->>A: fresh challenge
+  A->>B: key exchange + proof it's really A
+  Note over A,B: 3. Chat
+  A->>B: ratcheted, encrypted messages
+  B->>A: ratcheted, encrypted messages

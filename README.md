@@ -18,58 +18,11 @@ The project is an experiment to see how an AI agent builds a "private & secure" 
 
 The Rust core (`rust-core/`) does the crypto, storage and Tor. The Kotlin app (`app/`) is only the screens.
 
-```mermaid
-flowchart LR
-  subgraph phone["Your phone"]
-    UI["Kotlin app<br/>screens only, no keys"]
-    subgraph core["Rust core"]
-      HS["Handshake<br/>X25519 + ML-KEM"]
-      RT["Double Ratchet<br/>ChaCha20-Poly1305"]
-      VT["Identity vault<br/>(encrypted)"]
-      TOR["Tor onion service"]
-    end
-    KS["Android Keystore<br/>wraps the vault key"]
-    UI <-->|UniFFI| core
-    VT --- KS
-  end
-  TOR <-->|Tor network| THEM["Your contact's phone<br/>(same app)"]
-```
+![How the app fits together: a Kotlin app on top of a Rust core that holds the handshake, ratchet, encrypted vault and Tor onion service, with the Android Keystore wrapping the vault key](docs/diagrams/architecture.png)
 
-```mermaid
-sequenceDiagram
-  participant A as Phone A
-  participant B as Phone B
-  Note over A,B: 1. In person, no network
-  A->>B: scan QR: keys + onion address
-  B->>A: scan QR: keys + onion address
-  Note over A,B: 2. Later, from anywhere
-  A->>A: start Tor, publish onion service
-  B->>B: start Tor, publish onion service
-  A->>B: dial B's onion address over Tor
-  B-->>A: fresh challenge
-  A->>B: key exchange + proof it's really A
-  Note over A,B: 3. Chat
-  A->>B: ratcheted, encrypted messages
-  B->>A: ratcheted, encrypted messages
-```
+![How two phones connect: scan QR codes in person, later start Tor and publish an onion service, dial over Tor, exchange keys, then chat](docs/diagrams/connecting.png)
 
-```mermaid
-flowchart TB
-  subgraph ram["RAM only: gone when the app closes"]
-    M["Messages"]
-    S["Sessions and ratchet keys"]
-    O["Onion service key"]
-  end
-  subgraph disk["On the phone, encrypted"]
-    V["Identity + contacts<br/>(sealed vault)"]
-    W["Vault key, wrapped by<br/>the Android Keystore"]
-  end
-  subgraph pub["On the phone, public data only"]
-    T["Tor directory cache"]
-  end
-  V -->|rebuilds| O
-  W -->|opens| V
-```
+![What lives where: messages, sessions and the onion service key are in RAM only; the identity and contacts are in an encrypted vault on the phone; Tor's directory cache is public data](docs/diagrams/storage.png)
 
 ## Where it's at
 
