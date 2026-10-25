@@ -4,13 +4,13 @@ Things I could not run myself: they need the real Tor network, a phone, or your 
 Run them when you have time, in this order, and paste the output back. Each item says what
 a pass looks like. New items are appended at the end; nothing here has been run yet.
 
-Last updated: 2026-10-25.
+Last updated: 2026-10-25 (after the first results from A1 to A3).
 
 ## A. On your laptop, in WSL (Ubuntu 24.04)
 
 These need an unfiltered internet connection. They use the Rust core with its Tor feature.
 
-### A1. Warm restart of the spike (about 6 minutes)
+### A1. Warm restart of the spike. DONE 2026-10-25
 
 Why: the first publish took 5.6 minutes. This shows whether saved state makes later starts fast.
 
@@ -20,10 +20,9 @@ cd ~/sovereign-messenger/spikes/t0-arti
 ./target/debug/t0-arti server /tmp/t0s
 ```
 
-Paste: the new `bootstrap_secs` and `publish_secs` lines.
-Pass: nothing to pass or fail; I need the numbers.
+Result: bootstrap 11.16 s, publish 67.65 s with saved state (334 s the first time). Recorded in PLAN.md.
 
-### A2. The real Tor test of the core (10 to 25 minutes)
+### A2. The real Tor test of the core. 2 of 3 PASSED; RE-RUN THE THIRD
 
 Why: this is the first time the product code (not the spike) talks to real Tor. It starts two
 nodes, pairs them, dials one from the other over Tor, and sends a message each way.
@@ -35,22 +34,39 @@ cd rust-core
 cargo test --features tor --test tor_live -- --ignored --nocapture --test-threads=1
 ```
 
-Paste: the whole output, including every `RESULT` line.
-Pass: three tests pass (`two_identities_message_each_other_over_tor`,
-`a_warm_restart_with_saved_state_is_measured`,
-`a_restored_identity_comes_up_under_the_same_onion_address`).
-If one fails or times out, paste the last 60 lines and say which.
-
-### A3. The ordinary test suite with Tor compiled in (3 to 8 minutes)
+Result so far: `a_restored_identity_comes_up_under_the_same_onion_address` and
+`a_warm_restart_with_saved_state_is_measured` passed (warm start 20 s against 88 s cold).
+`two_identities_message_each_other_over_tor` failed because of a bug in my test (it pinned
+the contacts under the wrong names), not in the app. It is fixed. Please run just that test
+again, after `git pull`:
 
 ```bash
 cd ~/sovereign-messenger/rust-core
-cargo test --features tor
+cargo test --features tor --test tor_live two_identities -- --ignored --nocapture
 ```
 
-Pass: everything passes except `dropping_one_secret_keeps_a_live_neighbour_on_its_page_locked`,
-which depends on the memory allocator and fails in the Linux sandbox I used. Tell me if it
-passes or fails for you; both are useful.
+This is the first time the product code would dial a contact over Tor, run the handshake and
+send a message each way, so it is the most important one. It can take 5 to 10 minutes: one of
+the two services took about 5 minutes to publish last time.
+Paste: the whole output, including every `RESULT` line.
+Pass: the test passes, with a `RESULT connect + handshake over Tor` line and a
+`RESULT first message latency` line. If it fails or times out, paste the last 60 lines.
+
+### A3. The ordinary test suite with Tor compiled in. RE-RUN WITH --no-fail-fast
+
+```bash
+cd ~/sovereign-messenger
+git pull
+cd rust-core
+cargo test --features tor --no-fail-fast
+```
+
+Result so far: the allocator test `dropping_one_secret_keeps_a_live_neighbour_on_its_page_locked`
+failed on your machine too, and cargo then stopped, so the test files after it never ran. That
+test depended on the allocator; I rewrote it and checked that it passes, and that it fails when I
+put the bug back. Run it again with `--no-fail-fast` (needed so one failure does not hide the rest).
+Pass: `0 failed` in every `test result` line. Paste the lines that say `test result`, and the name of
+anything that failed.
 
 ## B. On a phone (one phone is enough for B1 to B4)
 

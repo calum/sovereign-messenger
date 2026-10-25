@@ -40,17 +40,28 @@ fn wait_ready(who: &str, m: &Messenger, since: Instant) -> Duration {
     }
 }
 
-fn pair(a: &Messenger, a_label: &str, b: &Messenger, b_label: &str) {
-    a.scan_pairing(
-        b_label.into(),
-        b.own_pairing_payload(String::new()).unwrap(),
-    )
-    .unwrap();
-    b.scan_pairing(
-        a_label.into(),
-        a.own_pairing_payload(String::new()).unwrap(),
-    )
-    .unwrap();
+/// Pins each side to the other. `b_on_a` is the name `a` uses for `b`, and `a_on_b` the name
+/// `b` uses for `a`. (An earlier version of this helper swapped them, so Alice had no
+/// contact called "bob" and the first live run failed with `NotPinned`.)
+fn pair(a: &Messenger, b_on_a: &str, b: &Messenger, a_on_b: &str) {
+    a.scan_pairing(b_on_a.into(), b.own_pairing_payload(String::new()).unwrap())
+        .unwrap();
+    b.scan_pairing(a_on_b.into(), a.own_pairing_payload(String::new()).unwrap())
+        .unwrap();
+}
+
+/// Needs no network: guards the helper above, which the live test depends on.
+#[test]
+fn pair_pins_each_side_under_the_name_the_other_is_dialled_by() {
+    let alice = Messenger::new();
+    let bob = Messenger::new();
+    pair(&alice, "bob", &bob, "alice");
+    assert_eq!(alice.pinned_peers().unwrap(), vec!["bob".to_string()]);
+    assert_eq!(bob.pinned_peers().unwrap(), vec!["alice".to_string()]);
+    assert_eq!(
+        alice.pinned_onion_address("bob".into()).unwrap(),
+        Some(bob.own_onion_address().unwrap())
+    );
 }
 
 #[test]
