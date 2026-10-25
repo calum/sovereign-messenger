@@ -24,6 +24,7 @@ Use `mise` tasks; they are the source of truth (see `mise.toml`).
 - `mise run rust:lint`: `cargo fmt --check` and `clippy -D warnings`
 - `mise run check`: lint plus every test suite
 - `mise run android:debug`: debug APK
+- `mise run android:share`: serve the debug APK on the Wi-Fi address with a QR code (Windows; Ctrl+C stops)
 
 ## Environment
 

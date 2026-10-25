@@ -85,6 +85,8 @@ mise run android:debug
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
+To get it onto a phone on the same Wi-Fi (Windows only), run `mise run android:share`. It prints a download link and a QR code, then serves the APK on the laptop's Wi-Fi address until you press Ctrl+C. Anyone on that network who has the link can download the APK while it runs, so stop it when the install is done. `SERVE_IP` and `SERVE_PORT` override the address and port. The `qrcode` package is needed for the QR code (`pip install qrcode`).
+
 ## Repository layout
 
 ```

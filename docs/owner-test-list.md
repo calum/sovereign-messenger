@@ -59,7 +59,7 @@ mise run rust:android      # builds the core with Tor for arm64-v8a and x86_64 (
 mise run android:debug     # builds the debug APK
 ```
 
-Install `app/build/outputs/apk/debug/app-debug.apk`.
+Install `app/build/outputs/apk/debug/app-debug.apk`. To install it on the phone without a cable, put the phone on the same Wi-Fi as the laptop (not a guest network) and run `mise run android:share`. Scan the QR code with the phone's camera, open the link, and install. Press Ctrl+C on the laptop when you are done.
 
 ### B1. The app starts and the native library loads
 
