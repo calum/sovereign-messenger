@@ -37,7 +37,7 @@ cargo test --features tor --test tor_live -- --ignored --nocapture --test-thread
 Result: all three passed. The two-identity test connected over Tor (handshake 8.6 s) and a
 message arrived in 143 ms. Recorded in PLAN.md ("Tor live results").
 
-### A3. The ordinary test suite with Tor compiled in. RE-RUN WITH --no-fail-fast
+### A3. The ordinary test suite with Tor compiled in. DONE 2026-10-25, everything passes
 
 ```bash
 cd ~/sovereign-messenger
@@ -46,12 +46,9 @@ cd rust-core
 cargo test --features tor --no-fail-fast
 ```
 
-Result so far: the allocator test `dropping_one_secret_keeps_a_live_neighbour_on_its_page_locked`
-failed on your machine too, and cargo then stopped, so the test files after it never ran. That
-test depended on the allocator; I rewrote it and checked that it passes, and that it fails when I
-put the bug back. Run it again with `--no-fail-fast` (needed so one failure does not hide the rest).
-Pass: `0 failed` in every `test result` line. Paste the lines that say `test result`, and the name of
-anything that failed.
+Result: with `--no-fail-fast`, every test passes on the owner's machine, including the rewritten
+allocator test (`dropping_one_secret_keeps_a_live_neighbour_on_its_page_locked`). This is the first
+run of that test on a machine other than the cloud sandbox.
 
 ## B. On a phone (one phone is enough for B1 to B4)
 
