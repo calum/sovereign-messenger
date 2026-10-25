@@ -1,25 +1,22 @@
 # Sovereign Mesh
 
-**Can an AI build a private messaging app? We're finding out.**
+A peer-to-peer messenger for Android, written entirely by an AI agent (Claude Haiku 5.5). It is experimental and has not been audited, so please don't use it for anything sensitive.
 
-> Experimental. Not audited. Please don't use it for anything sensitive.
+## What it is
 
-## What is this?
+A chat app for a small group of people, up to five. There are no servers: phones talk directly to each other.
 
-It's an experiment. Every line of code in this repo (Rust, Kotlin, build scripts, even this README) was written by an AI agent, **Claude Haiku 5.5**, following instructions from the project owner.
+The project is an experiment to see how an AI agent builds a "private & secure" messaging app. The AI writes all the code. A human runs the tests and decides what counts as working, and the AI's own claims don't count.
 
-The question: can an AI agent produce a "private & secure" messaging app, and how would you know if it did? So the AI does the building, and a human does the testing. Nothing counts as working until the human has run it. The AI's own claims don't count.
+## How it works
 
-## The idea
+- **Pairing:** you meet in person and scan each other's QR codes. That swaps the keys and each phone's address. The plan is to share the app in person too, not through a store.
+- **Connecting:** each phone runs a Tor onion service, and messages travel over Tor. That lets you chat from anywhere, and the aim is that the network can't see who is talking to whom.
+- **Encryption:** the key exchange uses X25519 and ML-KEM-768 (so it is post-quantum), and messages use a Double Ratchet with ChaCha20-Poly1305. It is end-to-end encrypted.
+- **Messages:** they are kept in RAM only. Close the app and they're gone.
+- **Contacts and keys:** these can be saved, but only encrypted. The vault key is wrapped by the Android Keystore.
 
-- **No servers, no cloud.** Phones talk to each other directly.
-- **Meet in person first.** You swap details by scanning QR codes, and you get the app itself from each other, not from a store.
-- **Then chat from anywhere,** over Tor, so the network can't see who's talking to who.
-- **End-to-end encrypted,** with post-quantum crypto in the key exchange.
-- **Chats live in RAM only.** Close the app and they're gone.
-- **Contacts and keys can be saved,** but only encrypted.
-
-## How it fits together
+The Rust core (`rust-core/`) does the crypto, storage and Tor. The Kotlin app (`app/`) is only the screens.
 
 ```mermaid
 flowchart LR
@@ -38,8 +35,6 @@ flowchart LR
   TOR <-->|Tor network| THEM["Your contact's phone<br/>(same app)"]
 ```
 
-## How two phones connect
-
 ```mermaid
 sequenceDiagram
   participant A as Phone A
@@ -57,8 +52,6 @@ sequenceDiagram
   A->>B: ratcheted, encrypted messages
   B->>A: ratcheted, encrypted messages
 ```
-
-## What lives where
 
 ```mermaid
 flowchart TB
@@ -80,28 +73,23 @@ flowchart TB
 
 ## Where it's at
 
-- **Done:** the crypto core, the Tor transport, the encrypted vault, and an Android app that installs and starts on a phone. More than 300 automated tests pass.
-- **Done:** two identities chatted over the real Tor network on a laptop.
-- **Not yet:** two real phones talking to each other. Until that works, there is **no claim** that it's private from someone watching the network.
-- **Not yet:** anyone independent has reviewed the crypto.
+- **Working:** the crypto core, the encrypted vault, the Tor transport, and an app that installs and starts on a phone. Over 300 automated tests pass. Two identities have chatted over the real Tor network on a laptop.
+- **Not tested yet:** two real phones talking to each other. Until that works, nothing here claims it is private from someone watching the network.
+- **Not reviewed:** nobody independent has checked the crypto.
 
-The detailed version is in [docs/status.md](docs/status.md). [PLAN.md](PLAN.md) is the checklist and the log of every decision, including the ones the AI got wrong.
+More detail is in [docs/status.md](docs/status.md). [PLAN.md](PLAN.md) is the checklist and the log of decisions.
 
-## Try it
+## Building it
 
 ```bash
 mise run check          # lint and run every test
 mise run android:debug  # build the debug APK
 ```
 
-Android SDK, NDK and Windows notes: [docs/setup.md](docs/setup.md). Checks that need a human and a phone: [docs/owner-test-list.md](docs/owner-test-list.md).
+Setup for the Android SDK, NDK and Windows is in [docs/setup.md](docs/setup.md). The checks that need a person and a phone are in [docs/owner-test-list.md](docs/owner-test-list.md).
 
-## Found a problem?
+## Other
 
-It's a personal experiment. If you spot a security problem, open a GitHub issue marked as a security report, and keep exploit details out of it until there's a fix.
-
-## Licence
-
-None yet, so all rights reserved.
-
-Other files: [CLAUDE.md](CLAUDE.md) holds the rules the AI works under, and [llm.txt](llm.txt) is a short summary for other AI tools.
+- Security problems: open a GitHub issue marked as a security report, and keep exploit details out of it until there is a fix.
+- Licence: none yet, so all rights reserved.
+- [CLAUDE.md](CLAUDE.md) has the rules the AI works under, and [llm.txt](llm.txt) is a short summary for AI tools.
