@@ -1,0 +1,15 @@
+flowchart TB
+  subgraph ram["RAM only: gone when the app closes"]
+    M["Messages"]
+    S["Sessions and ratchet keys"]
+    O["Onion service key"]
+  end
+  subgraph disk["On the phone, encrypted"]
+    V["Identity + contacts<br/>(sealed vault)"]
+    W["Vault key, wrapped by<br/>the Android Keystore"]
+  end
+  subgraph pub["On the phone, public data only"]
+    T["Tor directory cache"]
+  end
+  V -->|rebuilds| O
+  W -->|opens| V
