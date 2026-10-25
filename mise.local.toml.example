@@ -1,0 +1,11 @@
+# Copy this file to mise.local.toml, fix the paths for your machine, and run `mise trust`.
+# mise loads mise.local.toml on top of mise.toml; it is git-ignored, so nothing here is committed.
+# Use forward slashes: both Git Bash and Gradle accept them.
+
+[env]
+# The Android NDK the native build uses. The version must match `ndk_version` in
+# rust-core/scripts/build-android.sh (currently 27.2.12479018).
+ANDROID_NDK_HOME = "C:/Users/Calum/AppData/Local/Android/Sdk/ndk/27.2.12479018"
+
+# JDK 17 for Gradle (the system JDK 11 is too old).
+JAVA_HOME = "C:/Users/Calum/AppData/Local/Java/jdk-17.0.20.1+1"

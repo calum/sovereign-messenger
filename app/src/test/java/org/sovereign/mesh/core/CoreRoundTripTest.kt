@@ -19,8 +19,10 @@ class CoreRoundTripTest {
         val bob = Messenger()
         // Bob must pin Alice's key from her QR code before he accepts her handshake.
         bob.scanPairing("alice", alice.ownPairingPayload(""))
-        val init = alice.startSession("bob", bob.ownIdentity())
-        bob.acceptSession("alice", init)
+        // Bob issues the challenge first; Alice's handshake must answer it.
+        val challenge = bob.responderChallenge()
+        val init = alice.startSession("bob", bob.ownIdentity(), challenge)
+        bob.acceptSession("alice", init, challenge)
         return alice to bob
     }
 

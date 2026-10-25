@@ -14,7 +14,9 @@ libc = "0.2"
 ml-kem = "0.3"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 hkdf = "0.12"
+hmac = "0.12"
 sha2 = "0.10"
+sha3 = "0.12"
 chacha20poly1305 = "0.10"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
@@ -22,9 +24,39 @@ thiserror = "1"
 getrandom = "0.3"
 uniffi = "0.32"
 
+# Tor transport (feature `tor`, off by default). Pinned to the version the T0 spike
+# proved. `experimental-api` and `ephemeral-keystore` are arti's experimental
+# features: together they let the onion service key live in memory only, built
+# from the identity's seed, instead of in a plaintext keystore file (PLAN.md Decisions).
+arti-client = { version = "=0.47.0", optional = true, default-features = false, features = ["tokio", "rustls", "compression", "onion-service-service", "onion-service-client", "experimental-api", "ephemeral-keystore"] }
+tor-hsservice = { version = "=0.47.0", optional = true }
+tor-hscrypto = { version = "=0.47.0", optional = true }
+tor-llcrypto = { version = "=0.47.0", optional = true }
+tor-proto = { version = "=0.47.0", optional = true }
+tor-cell = { version = "=0.47.0", optional = true }
+tor-rtcompat = { version = "=0.47.0", optional = true }
+tor-keymgr = { version = "=0.47.0", optional = true }
+tor-config = { version = "=0.47.0", optional = true }
+safelog = { version = "=0.10.0", optional = true }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "time", "sync", "macros"] }
+futures = { version = "0.3", optional = true }
+# arti's SQLite directory cache needs a C SQLite; bundle it so no system library is required (Android, Windows).
+libsqlite3-sys = { version = "=0.38.2", optional = true, features = ["bundled"] }
+rustls = { version = "=0.23.46", optional = true, default-features = false, features = ["ring", "std", "tls12", "logging"] }
+
+[dev-dependencies]
+tokio-util = { version = "0.7", features = ["compat"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros", "io-util"] }
+futures = "0.3"
+
 [features]
 # Enables the uniffi-bindgen binary that generates the Kotlin bindings.
 bindgen = ["uniffi/cli"]
+tor = [
+    "dep:arti-client", "dep:tor-hsservice", "dep:tor-hscrypto", "dep:tor-llcrypto",
+    "dep:tor-proto", "dep:tor-cell", "dep:tor-rtcompat", "dep:tor-keymgr", "dep:tor-config", "dep:safelog",
+    "dep:tokio", "dep:futures", "dep:libsqlite3-sys", "dep:rustls",
+]
 
 [[bin]]
 name = "uniffi-bindgen"
@@ -34,3 +66,5 @@ required-features = ["bindgen"]
 [profile.release]
 panic = "abort"
 debug = false
+# Native libraries ship without symbols: the Tor build is about 21 MB with them and 14 MB without.
+strip = "symbols"

@@ -1,0 +1,114 @@
+//! How long the handshake helpers wait for a frame is decided by the link, so a slow
+//! carrier (an onion circuit) can be given more time than a LAN socket without the
+//! helpers changing.
+
+use std::time::{Duration, Instant};
+
+use rust_core::transport::{Transport, TransportError};
+use rust_core::wire;
+
+/// A link that never delivers anything and says how long a handshake may wait on it.
+struct Silent(Option<Duration>);
+
+/// Like `Silent`, but the responder's wait for the initiator is set apart from the rest.
+struct SlowButStrict {
+    general: Duration,
+    responder: Duration,
+}
+
+impl Transport for SlowButStrict {
+    fn send(&self, _frame: &[u8]) -> Result<(), TransportError> {
+        Ok(())
+    }
+
+    fn receive(&self) -> Result<Option<Vec<u8>>, TransportError> {
+        std::thread::sleep(Duration::from_millis(20));
+        Ok(None)
+    }
+
+    fn handshake_deadline(&self) -> Duration {
+        self.general
+    }
+
+    fn responder_deadline(&self) -> Duration {
+        self.responder
+    }
+}
+
+impl Transport for Silent {
+    fn send(&self, _frame: &[u8]) -> Result<(), TransportError> {
+        Ok(())
+    }
+
+    fn receive(&self) -> Result<Option<Vec<u8>>, TransportError> {
+        std::thread::sleep(Duration::from_millis(20));
+        Ok(None)
+    }
+
+    fn handshake_deadline(&self) -> Duration {
+        self.0.unwrap_or_else(|| DefaultOnly.handshake_deadline())
+    }
+}
+
+/// Uses the trait's default, so a test can read it.
+struct DefaultOnly;
+
+impl Transport for DefaultOnly {
+    fn send(&self, _frame: &[u8]) -> Result<(), TransportError> {
+        Ok(())
+    }
+
+    fn receive(&self) -> Result<Option<Vec<u8>>, TransportError> {
+        Ok(None)
+    }
+}
+
+#[test]
+fn the_default_handshake_deadline_is_ten_seconds() {
+    assert_eq!(DefaultOnly.handshake_deadline(), Duration::from_secs(10));
+}
+
+#[test]
+fn the_helpers_give_up_when_the_links_own_deadline_passes() {
+    let link = Silent(Some(Duration::from_millis(300)));
+    let start = Instant::now();
+    assert!(wire::receive_challenge(&link).is_err());
+    let took = start.elapsed();
+    assert!(
+        took >= Duration::from_millis(250),
+        "gave up too early: {took:?}"
+    );
+    assert!(
+        took < Duration::from_secs(5),
+        "ignored the link's deadline: {took:?}"
+    );
+}
+
+#[test]
+fn the_responder_deadline_defaults_to_the_general_one() {
+    assert_eq!(
+        DefaultOnly.responder_deadline(),
+        DefaultOnly.handshake_deadline()
+    );
+}
+
+#[test]
+fn the_responder_gives_up_on_a_silent_initiator_by_its_own_shorter_deadline() {
+    // A stranger who connects and says nothing must not hold a worker for the full
+    // general deadline. The initiator side still gets the long one.
+    let link = SlowButStrict {
+        general: Duration::from_secs(30),
+        responder: Duration::from_millis(300),
+    };
+    let start = Instant::now();
+    assert!(wire::receive_handshake(&link).is_err());
+    let took = start.elapsed();
+    assert!(
+        took >= Duration::from_millis(250),
+        "gave up too early: {took:?}"
+    );
+    assert!(
+        took < Duration::from_secs(5),
+        "waited the general deadline: {took:?}"
+    );
+}

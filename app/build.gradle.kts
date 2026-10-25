@@ -82,6 +82,32 @@ tasks.withType<Test>().configureEach {
     )
 }
 
+// The generated Kotlin loads the native library by the name written into rust_core.kt, and
+// Android finds it only if the file in jniLibs has exactly that name. A mismatch builds fine
+// and then crashes the app at launch with UnsatisfiedLinkError, and the JVM tests cannot see it
+// because they load the library by path. So the build reads the name from the bindings and
+// refuses to package an APK whose libraries are missing or named differently.
+val verifyNativeLibraries by tasks.registering {
+    val bindings = file("src/main/java/uniffi/rust_core/rust_core.kt")
+    val jniLibs = file("src/main/jniLibs")
+    doLast {
+        val name = Regex("""findLibraryName[\s\S]*?return "([A-Za-z0-9_]+)""")
+            .find(bindings.readText())?.groupValues?.get(1)
+            ?: throw GradleException("Could not read the native library name from $bindings")
+        val missing = listOf("arm64-v8a", "x86_64").filter { !File(jniLibs, "$it/lib$name.so").isFile }
+        if (missing.isNotEmpty()) {
+            val found = jniLibs.walkTopDown().filter { it.isFile }.map { it.relativeTo(jniLibs).path }.toList()
+            throw GradleException(
+                "The bindings load lib$name.so but it is missing for: ${missing.joinToString()}. " +
+                    "Found in jniLibs: ${found.ifEmpty { listOf("nothing") }.joinToString()}. " +
+                    "Run: mise run rust:android",
+            )
+        }
+    }
+}
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(verifyNativeLibraries) }
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)

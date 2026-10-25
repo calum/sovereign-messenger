@@ -46,11 +46,23 @@ object UpdateInstaller {
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
 
-    /** The installed version name, or "unknown" if the package cannot be read. */
-    fun installedVersion(context: Context): String =
+    /** The installed version name, for display only. Not used for the downgrade check. */
+    fun installedVersionName(context: Context): String =
         try {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
         } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
             "unknown"
+        }
+
+    /**
+     * The installed version code, which rust-core compares against the signed update
+     * version. Fails closed: if the package cannot be read, Long.MAX_VALUE is returned,
+     * so no update is strictly newer and every update is refused as a downgrade.
+     */
+    fun installedVersion(context: Context): Long =
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
+        } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+            Long.MAX_VALUE
         }
 }

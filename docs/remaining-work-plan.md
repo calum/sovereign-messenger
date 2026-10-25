@@ -1,5 +1,7 @@
 # Remaining work plan
 
+> **Historical.** Written on 2026-10-24. Parts are out of date: Tor is now built (not "not implemented"), identities now persist, and the branch is pushed. `PLAN.md` and `docs/owner-test-list.md` are current.
+
 _Written 2026-10-24, after the plan/complete-remaining branch (commits 71060c3 to fda61d0). PLAN.md is the checklist; this file says how to finish what is left, in what order, and who has to do each step. Where the two disagree, PLAN.md is the record of what is verified._
 
 ## Where things stand

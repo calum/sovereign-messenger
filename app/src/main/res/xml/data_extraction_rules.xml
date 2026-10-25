@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Nothing is backed up or transferred. Chats live only in RAM. -->
+<!-- Nothing is backed up or transferred. Chats live only in RAM. The sealed identity vault and
+     its Keystore-wrapped key sit in app-private files; the root exclusions below cover them. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="root" path="." />

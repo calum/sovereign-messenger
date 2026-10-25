@@ -34,16 +34,16 @@ import androidx.core.content.ContextCompat
 import com.google.zxing.PlanarYUVLuminanceSource
 import org.sovereign.mesh.core.QrCodec
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Camera scanner for a pairing code. CameraX supplies frames; ZXing (through
- * [QrCodec]) finds the payload bytes. The first code found is handed to
- * [onPayload] once, and rust-core decides whether to pin it.
+ * [QrCodec]) finds one QR part per frame. Every decoded part is handed to
+ * [onPart] on the main thread. A pairing needs more than one part, so the caller
+ * collects them; the scanner does not decide when a pairing is complete.
  * The camera is used only while this composable is on screen.
  */
 @Composable
-fun PairingScanner(onPayload: (ByteArray) -> Unit, onCancel: () -> Unit) {
+fun PairingScanner(onPart: (ByteArray) -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
     var granted by remember {
         mutableStateOf(
@@ -60,7 +60,7 @@ fun PairingScanner(onPayload: (ByteArray) -> Unit, onCancel: () -> Unit) {
 
     Column(modifier = Modifier.fillMaxWidth()) {
         if (granted) {
-            CameraPreview(onPayload)
+            CameraPreview(onPart)
         } else {
             Text(
                 "Camera permission is needed to scan a code. Allow it, or cancel.",
@@ -74,13 +74,12 @@ fun PairingScanner(onPayload: (ByteArray) -> Unit, onCancel: () -> Unit) {
 }
 
 @Composable
-private fun CameraPreview(onPayload: (ByteArray) -> Unit) {
+private fun CameraPreview(onPart: (ByteArray) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val latestOnPayload by rememberUpdatedState(onPayload)
+    val latestOnPart by rememberUpdatedState(onPart)
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val providerHolder = remember { arrayOfNulls<ProcessCameraProvider>(1) }
-    val delivered = remember { AtomicBoolean(false) }
     var unavailable by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
@@ -113,10 +112,8 @@ private fun CameraPreview(onPayload: (ByteArray) -> Unit) {
                         .build()
                         .also { useCase ->
                             useCase.setAnalyzer(analysisExecutor) { frame ->
-                                analyse(frame) { payload ->
-                                    if (delivered.compareAndSet(false, true)) {
-                                        mainExecutor.execute { latestOnPayload(payload) }
-                                    }
+                                analyse(frame) { part ->
+                                    mainExecutor.execute { latestOnPart(part) }
                                 }
                             }
                         }

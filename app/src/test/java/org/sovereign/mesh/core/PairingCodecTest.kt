@@ -10,11 +10,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import uniffi.rust_core.FacadeException
 import uniffi.rust_core.Messenger
+import uniffi.rust_core.PairingAssembler
 
 /**
- * The QR path end to end on the JVM: payload bytes from rust-core, encoded with
- * ZXing, rendered to pixels, decoded again, and pinned through the real core.
- * No camera is involved; the camera only supplies luminance frames.
+ * The QR path end to end on the JVM: payload parts from rust-core, each encoded
+ * with ZXing, rendered to pixels, decoded again, collected until complete, and
+ * pinned through the real core. No camera is involved; the camera only supplies
+ * luminance frames.
  */
 class PairingCodecTest {
 
@@ -39,12 +41,41 @@ class PairingCodecTest {
     private fun blankFrame(side: Int): LuminanceSource =
         PlanarYUVLuminanceSource(ByteArray(side * side) { 0xFF.toByte() }, side, side, 0, 0, side, side, false)
 
+    /** One QR code's worth of bytes: encode, render, and decode through ZXing. */
+    private fun throughQr(part: ByteArray): ByteArray? = QrCodec.decode(luminanceOf(QrCodec.encode(part)))
+
     @Test
-    fun payloadFromRustSurvivesQrRoundTrip() {
-        val payload = Messenger().ownPairingPayload("10.0.0.2:7000")
-        val matrix = QrCodec.encode(payload)
-        val decoded = QrCodec.decode(luminanceOf(matrix))
-        assertArrayEquals(payload, decoded)
+    fun partsFromRustSurviveQrRoundTrip() {
+        val parts = Messenger().ownPairingParts("10.0.0.2:7000")
+        assertEquals(2, parts.size)
+        for (part in parts) {
+            assertArrayEquals(part, throughQr(part))
+        }
+    }
+
+    /**
+     * R1/A2: one scan that fails in ten minutes is a field bug. Each payload is a
+     * fresh identity, so 200 of them sample the sizes a real pairing produces.
+     * Every part must decode, and the parts must reassemble to a payload.
+     */
+    @Test
+    fun twoHundredFreshPayloadsDecodeEveryTime() {
+        val failures = mutableListOf<Int>()
+        repeat(200) { i ->
+            val parts = Messenger().ownPairingParts("10.0.0.2:7000")
+            val asm = PairingAssembler()
+            var full: ByteArray? = null
+            for (part in parts) {
+                val decoded = throughQr(part)
+                if (decoded == null || !decoded.contentEquals(part)) {
+                    failures += i
+                    return@repeat
+                }
+                full = asm.addPart(decoded)
+            }
+            if (full == null) failures += i
+        }
+        assertEquals("payloads that failed to decode: $failures", emptyList<Int>(), failures)
     }
 
     @Test
@@ -53,14 +84,35 @@ class PairingCodecTest {
     }
 
     @Test
-    fun scannedPayloadPinsThroughTheCore() {
+    fun allPartsPinThroughTheCore() {
         val alice = Messenger()
         val bob = Messenger()
-        val decoded = QrCodec.decode(luminanceOf(QrCodec.encode(bob.ownPairingPayload(""))))!!
+        val asm = PairingAssembler()
+        var full: ByteArray? = null
+        for (part in bob.ownPairingParts("")) {
+            full = asm.addPart(throughQr(part)!!)
+        }
 
-        val outcome = pairingOutcome("bob") { alice.scanPairing("bob", decoded) }
+        val outcome = pairingOutcome("bob") { alice.scanPairing("bob", full!!) }
 
         assertEquals(PairingOutcome.Pinned(bob.ownFingerprint(), ""), outcome)
+    }
+
+    /** A single QR code is half a pairing. It must not pin, and the core must refuse it as a payload. */
+    @Test
+    fun singlePartAloneDoesNotPin() {
+        val alice = Messenger()
+        val bob = Messenger()
+        val part = throughQr(bob.ownPairingParts("")[0])!!
+        val asm = PairingAssembler()
+
+        assertNull(asm.addPart(part))
+        assertEquals(1, asm.received().toInt())
+        assertNull(alice.pinFingerprint("bob"))
+        assertEquals(
+            PairingOutcome.Invalid,
+            pairingOutcome("bob") { alice.scanPairing("bob", part) },
+        )
     }
 
     @Test
@@ -68,9 +120,9 @@ class PairingCodecTest {
         val alice = Messenger()
         val bob = Messenger()
         val mallory = Messenger()
-        alice.scanPairing("bob", bob.ownPairingPayload(""))
+        alice.scanPairing("bob", joinParts(bob.ownPairingParts("")))
 
-        val outcome = pairingOutcome("bob") { alice.scanPairing("bob", mallory.ownPairingPayload("")) }
+        val outcome = pairingOutcome("bob") { alice.scanPairing("bob", joinParts(mallory.ownPairingParts(""))) }
 
         assertEquals(PairingOutcome.KeyChanged("bob"), outcome)
         assertEquals(bob.ownFingerprint(), alice.pinFingerprint("bob"))
@@ -80,7 +132,7 @@ class PairingCodecTest {
     fun rescanOfSameIdentityIsAlreadyPinned() {
         val alice = Messenger()
         val bob = Messenger()
-        val payload = bob.ownPairingPayload("")
+        val payload = joinParts(bob.ownPairingParts(""))
         alice.scanPairing("bob", payload)
 
         val outcome = pairingOutcome("bob") { alice.scanPairing("bob", payload) }
@@ -106,5 +158,13 @@ class PairingCodecTest {
         assertTrue(text.contains("bob"))
         assertTrue(Regex("[0-9a-f]{8}").find(text) == null)
         assertEquals(true, text.contains("refused"))
+    }
+
+    /** Test helper: collects every part of one identity into the full payload, as the scanner does. */
+    private fun joinParts(parts: List<ByteArray>): ByteArray {
+        val asm = PairingAssembler()
+        var full: ByteArray? = null
+        for (part in parts) full = asm.addPart(part)
+        return full!!
     }
 }

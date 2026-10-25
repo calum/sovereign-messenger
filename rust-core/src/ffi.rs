@@ -1,7 +1,12 @@
 //! UniFFI facade: the only surface Kotlin can call. Keys, chain state and
 //! plaintext history stay in Rust. Kotlin gets public identity bytes, handshake
 //! bytes, sealed wire bytes, and plaintext strings for display. It never gets a
-//! private key, a chain key or a message key. Errors carry no content.
+//! private identity key, a chain key or a message key. Errors carry no content.
+//!
+//! One exception, by owner decision (2026-10-25): `data_key` hands Kotlin the
+//! 32-byte vault key once, so the Android Keystore can wrap it, and `restore`
+//! takes it back after a restart. While Kotlin holds it, the plaintext key sits on
+//! the Java heap. The vault blob and the wrapped key are the only things Kotlin stores.
 //!
 //! Lock order: a session's send or receive lock may be held while taking the
 //! state lock, never the reverse. A receive blocked on the socket holds only its
@@ -17,12 +22,14 @@ use zeroize::Zeroize;
 use crate::apk_transfer;
 use crate::double_ratchet::{DoubleRatchet, Header, Message};
 use crate::error::CoreError;
-use crate::handshake::{self, Identity, IdentityPublic};
+use crate::handshake::{self, Identity, IdentityPublic, CHALLENGE_LEN};
+use crate::onion;
 use crate::pairing;
 use crate::secret::{Key32, SecretBytes};
 use crate::store::Store;
 use crate::transport::{TcpTransport, Transport};
 use crate::update;
+use crate::vault;
 use crate::wire::{self, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
 
 /// Public identity, safe to show in a QR code. Holds no secret material.
@@ -30,6 +37,8 @@ use crate::wire::{self, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
 pub struct PublicIdentity {
     pub x25519: Vec<u8>,
     pub mlkem_ek: Vec<u8>,
+    /// Ed25519 public key of the onion service (32 bytes).
+    pub onion: Vec<u8>,
 }
 
 /// First handshake message, sent by the initiator. Public values only.
@@ -39,6 +48,8 @@ pub struct HandshakeMessage {
     /// The initiator's long-term X25519 public key. The responder checks it against its pin.
     pub initiator_x25519: Vec<u8>,
     pub mlkem_ct: Vec<u8>,
+    /// Key-confirmation tag over the responder's challenge (32 bytes). Public.
+    pub tag: Vec<u8>,
 }
 
 /// A peer whose identity was just pinned from a scanned QR code.
@@ -78,6 +89,33 @@ pub struct LockReport {
     pub stored_locked: u64,
 }
 
+/// Where Tor is in coming up. `NotBuilt` means this build has no Tor at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum TorState {
+    NotBuilt,
+    Stopped,
+    Starting,
+    Bootstrapping,
+    Publishing,
+    Ready,
+    Failed,
+}
+
+/// Which side of a pair dials over Tor. Fixed by the two long-term keys, so both phones
+/// agree without talking: one `Dial`s and the other `Wait`s to be called.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum TorRole {
+    Dial,
+    Wait,
+}
+
+/// Tor progress for the status line. `percent` (0 to 100) is meaningful while bootstrapping.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct TorStatus {
+    pub state: TorState,
+    pub percent: u8,
+}
+
 #[derive(Debug, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 #[uniffi(flat_error)]
 pub enum FacadeError {
@@ -85,6 +123,9 @@ pub enum FacadeError {
     Malformed,
     #[error("authentication failed")]
     AuthFailed,
+    /// The update is validly signed but not newer than the installed build. It is refused.
+    #[error("update is older than or the same as the installed version")]
+    Downgraded,
     #[error("no session with this peer")]
     NoSession,
     /// The peer's pinned key differs from the one offered. The new key is refused.
@@ -102,6 +143,9 @@ pub enum FacadeError {
     NoLink,
     #[error("network error")]
     Network,
+    /// This build has no Tor, or Tor has not been started on this messenger.
+    #[error("tor is not running")]
+    TorUnavailable,
     #[error("internal state unavailable")]
     Internal,
 }
@@ -111,6 +155,7 @@ impl From<CoreError> for FacadeError {
         match e {
             CoreError::Malformed => FacadeError::Malformed,
             CoreError::Auth | CoreError::BadSignature => FacadeError::AuthFailed,
+            CoreError::Downgrade => FacadeError::Downgraded,
             CoreError::PinMismatch => FacadeError::PinChanged,
             CoreError::DuplicatePin => FacadeError::DuplicatePin,
             CoreError::Network => FacadeError::Network,
@@ -134,13 +179,59 @@ struct State {
     identity: Identity,
     public: IdentityPublic,
     sessions: HashMap<String, Arc<Session>>,
-    /// Trust-on-first-use pins, keyed by the caller's peer label. RAM only.
+    /// Trust-on-first-use pins, keyed by the caller's peer label. Sealed into the
+    /// vault by `export_vault`, never written in the clear.
     /// Survives `forget` and `wipe_all` so a later QR cannot replace a key.
     pins: HashMap<String, IdentityPublic>,
     store: Store,
     /// The peer a `listen_for_peer` call is waiting for, set only while it runs.
     /// Lets the UI show that a listener is up without a second source of truth.
     listening: Option<String>,
+    /// The challenge last issued by `responder_challenge`. Spent by the next
+    /// `accept_session`, whatever its outcome, so it cannot authenticate a second handshake.
+    pending_challenge: Option<[u8; CHALLENGE_LEN]>,
+    /// Key that seals the identity vault. `None` for a `new()` messenger, which
+    /// has no vault. Zeroized on drop.
+    data_key: Option<Key32>,
+    /// The Tor client and onion service, once started. Dropping it stops both.
+    #[cfg(feature = "tor")]
+    tor: Option<Arc<crate::tor::TorNode>>,
+}
+
+/// Collects the scanned QR parts of one pairing. Holds only public bytes.
+/// Make a new one for each scan; a finished or abandoned set is never reused.
+#[derive(uniffi::Object)]
+pub struct PairingAssembler {
+    inner: Mutex<pairing::Assembler>,
+}
+
+#[uniffi::export]
+impl PairingAssembler {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: Mutex::new(pairing::Assembler::new()),
+        })
+    }
+
+    /// Adds one scanned part. Returns the full payload once every part is in;
+    /// pass that to `Messenger::scan_pairing`. A refused part changes nothing.
+    pub fn add_part(&self, part: Vec<u8>) -> Result<Option<Vec<u8>>, FacadeError> {
+        let mut asm = self.inner.lock().map_err(|_| FacadeError::Internal)?;
+        Ok(asm.add(&part)?)
+    }
+
+    /// Distinct parts accepted so far.
+    pub fn received(&self) -> Result<u8, FacadeError> {
+        let asm = self.inner.lock().map_err(|_| FacadeError::Internal)?;
+        Ok(asm.received())
+    }
+
+    /// Parts in the set, or 0 before the first part.
+    pub fn total(&self) -> Result<u8, FacadeError> {
+        let asm = self.inner.lock().map_err(|_| FacadeError::Internal)?;
+        Ok(asm.total())
+    }
 }
 
 /// One local user. Dropping it wipes every key and message it holds.
@@ -155,16 +246,52 @@ impl Messenger {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
         let (identity, public) = Identity::generate();
-        Arc::new(Self {
-            state: Mutex::new(State {
-                identity,
-                public,
-                sessions: HashMap::new(),
-                pins: HashMap::new(),
-                store: Store::new(),
-                listening: None,
-            }),
-        })
+        Self::from_parts(identity, public, HashMap::new(), None)
+    }
+
+    /// A fresh identity with a fresh data key, for a first launch. The caller takes
+    /// `data_key` once to have it wrapped, then stores `export_vault` after every pin change.
+    #[uniffi::constructor]
+    pub fn create_persistent() -> Arc<Self> {
+        let (identity, public) = Identity::generate();
+        Self::from_parts(
+            identity,
+            public,
+            HashMap::new(),
+            Some(vault::new_data_key()),
+        )
+    }
+
+    /// Rebuilds the identity and pins from a stored vault. `AuthFailed` for a wrong
+    /// key or any changed byte, `Malformed` for a short blob or a key that is not
+    /// 32 bytes. Nothing is partly restored on a refusal. Sessions and messages
+    /// are not in the vault, so the restored messenger starts with none.
+    #[uniffi::constructor]
+    pub fn restore(data_key: Vec<u8>, vault_blob: Vec<u8>) -> Result<Arc<Self>, FacadeError> {
+        // The caller's copy of the key is wiped when this returns, whichever way it returns.
+        let data_key = zeroize::Zeroizing::new(data_key);
+        let key = Key32(to_array32(&data_key)?);
+        let plain = vault::open(&key, &vault_blob)?;
+        let (identity, public, pins) = vault::decode_contents(plain.expose())?;
+        Ok(Self::from_parts(identity, public, pins, Some(key)))
+    }
+
+    /// The vault key, handed out once so Kotlin can wrap it with the Keystore.
+    /// `Internal` for a messenger made with `new()`, which has no vault.
+    pub fn data_key(&self) -> Result<Vec<u8>, FacadeError> {
+        let st = self.lock()?;
+        let key = st.data_key.as_ref().ok_or(FacadeError::Internal)?;
+        Ok(key.0.to_vec())
+    }
+
+    /// The identity and pins sealed under the data key, fresh nonce each call.
+    /// Call it after `scan_pairing`, `unpin` or any handshake that pins a new peer,
+    /// and write the result to app-private storage excluded from backup.
+    pub fn export_vault(&self) -> Result<Vec<u8>, FacadeError> {
+        let st = self.lock()?;
+        let key = st.data_key.as_ref().ok_or(FacadeError::Internal)?;
+        let contents = vault::encode_contents(&st.identity, &st.pins)?;
+        Ok(vault::seal(key, &contents)?)
     }
 
     pub fn own_identity(&self) -> Result<PublicIdentity, FacadeError> {
@@ -172,13 +299,35 @@ impl Messenger {
         Ok(PublicIdentity {
             x25519: st.public.x25519.to_vec(),
             mlkem_ek: st.public.mlkem_ek.clone(),
+            onion: st.public.onion.to_vec(),
         })
+    }
+
+    /// This identity's v3 onion address, `<56 characters>.onion`. Stable across restarts
+    /// because its key is part of the vault. Public: it is also in the QR code.
+    pub fn own_onion_address(&self) -> Result<String, FacadeError> {
+        let st = self.lock()?;
+        Ok(onion::address(&st.public.onion))
+    }
+
+    /// The onion address pinned for `peer_id` from their scanned QR code, if any.
+    pub fn pinned_onion_address(&self, peer_id: String) -> Result<Option<String>, FacadeError> {
+        let st = self.lock()?;
+        Ok(st.pins.get(&peer_id).map(|p| onion::address(&p.onion)))
     }
 
     /// Payload bytes for this identity's QR code. Rust builds the bytes; Kotlin only renders them.
     pub fn own_pairing_payload(&self, connection_hint: String) -> Result<Vec<u8>, FacadeError> {
         let st = self.lock()?;
         Ok(pairing::encode(&st.public, &connection_hint)?)
+    }
+
+    /// The QR parts for this identity, in order. Each part is one QR code; the
+    /// scanner must collect all of them (see `PairingAssembler`) before pinning.
+    pub fn own_pairing_parts(&self, connection_hint: String) -> Result<Vec<Vec<u8>>, FacadeError> {
+        let st = self.lock()?;
+        let payload = pairing::encode(&st.public, &connection_hint)?;
+        Ok(pairing::split(&payload)?)
     }
 
     /// Fingerprint of this identity, shown so the two users can compare it in person.
@@ -197,6 +346,18 @@ impl Messenger {
     ) -> Result<ScannedPeer, FacadeError> {
         let (public, connection_hint) = pairing::decode(&payload)?;
         let mut st = self.lock()?;
+        // Your own code is never a contact, and one key is pinned under one label only:
+        // otherwise a caller identified by its key could match two contacts.
+        if public == st.public {
+            return Err(FacadeError::Malformed);
+        }
+        if st
+            .pins
+            .iter()
+            .any(|(label, pinned)| *label != peer_id && pinned.x25519 == public.x25519)
+        {
+            return Err(FacadeError::DuplicatePin);
+        }
         match st.pins.get(&peer_id) {
             Some(pinned) if *pinned == public => Err(FacadeError::DuplicatePin),
             Some(_) => Err(FacadeError::PinChanged),
@@ -234,16 +395,28 @@ impl Messenger {
         Ok(())
     }
 
-    /// Initiator side: encapsulate to the peer's identity and open a session.
-    /// Pins the identity on first use; refuses a different key for a pinned peer.
+    /// Responder side, first step: issues a fresh challenge and remembers it as the
+    /// one the next `accept_session` must answer. The caller sends these bytes to the
+    /// initiator, who passes them to `start_session`. A new call replaces the old challenge.
+    pub fn responder_challenge(&self) -> Result<Vec<u8>, FacadeError> {
+        let challenge = handshake::new_challenge();
+        self.lock()?.pending_challenge = Some(challenge);
+        Ok(challenge.to_vec())
+    }
+
+    /// Initiator side: encapsulate to the peer's identity and open a session, bound to
+    /// the responder's `challenge`. Pins the identity on first use; refuses a different
+    /// key for a pinned peer.
     pub fn start_session(
         &self,
         peer_id: String,
         peer: PublicIdentity,
+        challenge: Vec<u8>,
     ) -> Result<HandshakeMessage, FacadeError> {
         let peer = to_core_public(peer)?;
+        let challenge = to_array32(&challenge)?;
         let mut st = self.lock()?;
-        let (init, root) = handshake::initiate(&st.identity, &peer)?;
+        let (init, root) = handshake::initiate(&st.identity, &peer, &challenge)?;
         pin_or_check(&mut st, &peer_id, &peer)?;
         st.sessions.insert(
             peer_id,
@@ -258,25 +431,36 @@ impl Messenger {
             ephemeral_x25519: init.ephemeral_x25519.to_vec(),
             initiator_x25519: init.initiator_x25519.to_vec(),
             mlkem_ct: init.mlkem_ct,
+            tag: init.tag.to_vec(),
         })
     }
 
     /// Responder side: derive the same root from the initiator's handshake message.
-    /// Refuses with `NotPinned` if `peer_id` has no pin, and with `AuthFailed` if the
-    /// initiator's static key is not the pinned one.
+    /// `challenge` must be the one `responder_challenge` issued, and it is spent by
+    /// this call whatever the outcome. Refuses with `NotPinned` if `peer_id` has no
+    /// pin, and with `AuthFailed` if the initiator's static key is not the pinned one,
+    /// if the challenge is not the pending one, or if the confirmation tag does not
+    /// verify. No session is stored on any refusal, so a replay leaves a live session alone.
     pub fn accept_session(
         &self,
         peer_id: String,
         init: HandshakeMessage,
+        challenge: Vec<u8>,
     ) -> Result<(), FacadeError> {
+        let challenge = to_array32(&challenge)?;
         let init = handshake::HandshakeInit {
             ephemeral_x25519: to_array32(&init.ephemeral_x25519)?,
             initiator_x25519: to_array32(&init.initiator_x25519)?,
             mlkem_ct: init.mlkem_ct,
+            tag: to_array32(&init.tag)?,
         };
         let mut st = self.lock()?;
         let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
-        let root = handshake::respond(&st.identity, &pinned, &init)?;
+        let issued = st.pending_challenge.take().ok_or(FacadeError::AuthFailed)?;
+        if issued != challenge {
+            return Err(FacadeError::AuthFailed);
+        }
+        let root = handshake::respond(&st.identity, &pinned, &init, &issued)?;
         st.sessions.insert(
             peer_id,
             Arc::new(session_for(
@@ -319,23 +503,187 @@ impl Messenger {
     /// Dials `addr` (for example `192.168.1.20:47001`) and runs the handshake
     /// with the identity pinned for `peer_id`. The socket stays open for the session.
     pub fn connect_peer(&self, peer_id: String, addr: String) -> Result<(), FacadeError> {
-        let (init, root) = {
-            let st = self.lock()?;
-            let peer = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
-            handshake::initiate(&st.identity, peer)?
-        };
+        // Refuse before dialing: an unpinned peer cannot be authenticated.
+        self.lock()?
+            .pins
+            .get(&peer_id)
+            .ok_or(FacadeError::NotPinned)?;
         let link: Arc<dyn Transport> = Arc::new(
             TcpTransport::connect(&addr, CONNECT_TIMEOUT).map_err(|_| FacadeError::Network)?,
         );
-        wire::send_handshake(link.as_ref(), &init)?;
-        let session = session_for(
-            &root,
-            INITIATOR_TO_RESPONDER,
-            RESPONDER_TO_INITIATOR,
-            Some(link),
+        self.initiate_on_link(peer_id, link)
+    }
+
+    /// Binds `bind_addr` and waits up to `timeout_secs` for one connection from any
+    /// pinned contact. Returns the label of the contact whose long-term key the caller
+    /// proved in the handshake; a caller whose key is not pinned is refused with
+    /// `NotPinned` and no session is made. Blocks the calling thread.
+    pub fn listen_for_any_peer(
+        &self,
+        bind_addr: String,
+        timeout_secs: u32,
+    ) -> Result<String, FacadeError> {
+        let listener = TcpListener::bind(&bind_addr).map_err(|_| FacadeError::Network)?;
+        let link: Arc<dyn Transport> = Arc::new(
+            TcpTransport::accept(&listener, Duration::from_secs(u64::from(timeout_secs)))
+                .map_err(|_| FacadeError::Network)?,
         );
-        self.lock()?.sessions.insert(peer_id, Arc::new(session));
+        drop(listener); // one peer per listen call
+        self.respond_on_link(link, None)
+    }
+
+    /// Progress of Tor and the onion service, for the status line. Cheap; safe to poll.
+    pub fn tor_status(&self) -> Result<TorStatus, FacadeError> {
+        #[cfg(not(feature = "tor"))]
+        {
+            Ok(TorStatus {
+                state: TorState::NotBuilt,
+                percent: 0,
+            })
+        }
+        #[cfg(feature = "tor")]
+        {
+            use crate::tor::Phase;
+            let Some(node) = self.lock()?.tor.clone() else {
+                return Ok(TorStatus {
+                    state: TorState::Stopped,
+                    percent: 0,
+                });
+            };
+            let status = node.status();
+            let state = match status.phase {
+                Phase::Starting => TorState::Starting,
+                Phase::Bootstrapping => TorState::Bootstrapping,
+                Phase::Publishing => TorState::Publishing,
+                Phase::Ready => TorState::Ready,
+                Phase::Failed => TorState::Failed,
+            };
+            Ok(TorStatus {
+                state,
+                percent: status.percent,
+            })
+        }
+    }
+
+    /// Starts Tor and this identity's onion service in the background and returns at once.
+    /// `state_dir` must be app-private storage; it holds only Tor's public directory data
+    /// and guard state, never the onion key. Calling it again while a node is running is a
+    /// no-op; after a failure it starts a fresh node. `TorUnavailable` in a build without Tor.
+    pub fn tor_start(&self, state_dir: String) -> Result<(), FacadeError> {
+        #[cfg(not(feature = "tor"))]
+        {
+            let _ = state_dir;
+            Err(FacadeError::TorUnavailable)
+        }
+        #[cfg(feature = "tor")]
+        {
+            use crate::tor::{Phase, TorNode};
+            let replaced = {
+                let mut st = self.lock()?;
+                if let Some(node) = &st.tor {
+                    if node.status().phase != Phase::Failed {
+                        return Ok(());
+                    }
+                }
+                // A failed node is replaced. Sessions that ran over it go with it.
+                let old = st.tor.take();
+                st.sessions.retain(|_, s| !runs_over_tor(s));
+                let mut seed = [0u8; 32];
+                seed.copy_from_slice(st.identity.onion_seed());
+                let started =
+                    TorNode::start(std::path::Path::new(&state_dir), &seed, st.public.onion);
+                seed.zeroize();
+                st.tor = Some(started.map_err(|_| FacadeError::Network)?);
+                old
+            };
+            // Stopped outside the lock: shutting a node down can take a moment, and the UI
+            // reads this state on its own thread.
+            if let Some(old) = replaced {
+                old.shutdown();
+            }
+            Ok(())
+        }
+    }
+
+    /// Stops Tor and the onion service, and ends every session that ran over Tor: a session
+    /// whose carrier is gone must not linger as if it were connected. Sessions on other
+    /// carriers are untouched. Harmless if Tor was not started.
+    pub fn tor_stop(&self) -> Result<(), FacadeError> {
+        #[cfg(feature = "tor")]
+        let node = {
+            let mut st = self.lock()?;
+            st.sessions.retain(|_, s| !runs_over_tor(s));
+            st.tor.take()
+        };
+        #[cfg(not(feature = "tor"))]
+        self.lock()?.sessions.retain(|_, s| !runs_over_tor(s));
+        #[cfg(feature = "tor")]
+        if let Some(node) = node {
+            node.shutdown(); // outside the lock, and waiting accepts return at once
+        }
         Ok(())
+    }
+
+    /// Whether this phone dials `peer_id` or waits for the call. Two phones that both dial
+    /// would each make a session and the second would replace the first, so only the side
+    /// with the smaller long-term X25519 key dials. `NotPinned` for an unpinned contact.
+    pub fn tor_role(&self, peer_id: String) -> Result<TorRole, FacadeError> {
+        let st = self.lock()?;
+        let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
+        Ok(if st.public.x25519 < pinned.x25519 {
+            TorRole::Dial
+        } else {
+            TorRole::Wait
+        })
+    }
+
+    /// Dials the onion address pinned for `peer_id` and runs the handshake with it. Blocks,
+    /// possibly for minutes; the app runs it off the UI thread. `NotPinned` for an unpinned
+    /// contact, `TorUnavailable` if Tor was not started, `Network` if the peer cannot be reached.
+    pub fn connect_peer_tor(&self, peer_id: String) -> Result<(), FacadeError> {
+        let address = {
+            let st = self.lock()?;
+            let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
+            onion::address(&pinned.onion)
+        };
+        #[cfg(not(feature = "tor"))]
+        {
+            let _ = address;
+            Err(FacadeError::TorUnavailable)
+        }
+        #[cfg(feature = "tor")]
+        {
+            let node = self
+                .lock()?
+                .tor
+                .clone()
+                .ok_or(FacadeError::TorUnavailable)?;
+            let link = node.connect(&address).map_err(|_| FacadeError::Network)?;
+            self.initiate_on_link(peer_id, Arc::new(link))
+        }
+    }
+
+    /// Waits up to `timeout_secs` for a pinned contact to call this identity's onion service,
+    /// runs the handshake, and returns the contact's label. A caller whose key is not pinned
+    /// is refused (`NotPinned`). Blocks; the app runs it off the UI thread.
+    pub fn accept_peer_tor(&self, timeout_secs: u32) -> Result<String, FacadeError> {
+        #[cfg(not(feature = "tor"))]
+        {
+            let _ = timeout_secs;
+            Err(FacadeError::TorUnavailable)
+        }
+        #[cfg(feature = "tor")]
+        {
+            let node = self
+                .lock()?
+                .tor
+                .clone()
+                .ok_or(FacadeError::TorUnavailable)?;
+            let link = node
+                .accept(Duration::from_secs(u64::from(timeout_secs)))
+                .map_err(|_| FacadeError::Network)?;
+            self.respond_on_link(Arc::new(link), None)
+        }
     }
 
     /// Binds `bind_addr` and waits up to `timeout_secs` for one peer to connect.
@@ -455,28 +803,76 @@ impl Messenger {
         update::DEVELOPER_PUBLIC_KEY.map(|key| update::developer_key_fingerprint(&key))
     }
 
-    /// Checks an APK's detached Ed25519 signature against the compiled-in developer key.
-    /// Refuses a signature that is not 64 bytes (`Malformed`) and a bad one (`AuthFailed`).
-    pub fn verify_update(&self, apk: Vec<u8>, signature: Vec<u8>) -> Result<(), FacadeError> {
-        Ok(update::verify_update(&apk, &signature)?)
+    /// Checks an APK's detached Ed25519 signature over `version` and `apk`, against the
+    /// compiled-in developer key, and refuses a `version` not newer than
+    /// `installed_version`. Refuses a signature that is not 64 bytes (`Malformed`),
+    /// a bad one (`AuthFailed`), and an equal or older version (`Downgraded`).
+    /// `installed_version` comes from the app's installed version code.
+    pub fn verify_update(
+        &self,
+        apk: Vec<u8>,
+        version: u64,
+        signature: Vec<u8>,
+        installed_version: u64,
+    ) -> Result<(), FacadeError> {
+        Ok(update::verify_update(
+            &apk,
+            version,
+            &signature,
+            installed_version,
+        )?)
     }
 
     /// Listens on `bind_addr` (the update port is 47002) for one sender, reads one
-    /// APK, and returns it only if its signature verifies. Blocks; the app runs it
-    /// off the UI thread. Nothing is written to disk here.
+    /// APK, and returns it only if its signature verifies over the version it
+    /// carries and that version is newer than `installed_version`. Blocks; the app
+    /// runs it off the UI thread. Nothing is written to disk here.
     pub fn receive_update(
         &self,
         bind_addr: String,
         timeout_secs: u32,
+        installed_version: u64,
     ) -> Result<VerifiedUpdate, FacadeError> {
         let mut apk = Vec::new();
-        let signature = apk_transfer::receive_update_on(
+        let (version, signature) = apk_transfer::receive_update_on(
             &bind_addr,
             Duration::from_secs(u64::from(timeout_secs)),
             &mut apk,
         )?;
-        update::verify_update(&apk, &signature)?;
+        update::verify_update(&apk, version, &signature, installed_version)?;
         Ok(VerifiedUpdate { apk })
+    }
+
+    /// Dials `addr` (the receiver's update port, 47002) and forwards one bundle:
+    /// the APK, the developer's 64-byte Ed25519 signature over it, and the version.
+    /// The phone never signs; the signature comes from the developer's PC. A
+    /// signature that is not 64 bytes, or an APK that is empty or over
+    /// `MAX_APK_LEN`, is refused as `Malformed` before any connection is opened.
+    /// The receiver verifies the bundle itself, so a bad bundle is refused there.
+    /// Nothing is written to disk and no APK byte appears in an error.
+    pub fn send_update(
+        &self,
+        addr: String,
+        timeout_secs: u32,
+        apk: Vec<u8>,
+        version: u64,
+        signature: Vec<u8>,
+    ) -> Result<(), FacadeError> {
+        let sig: [u8; apk_transfer::SIGNATURE_LEN] = signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| FacadeError::Malformed)?;
+        // The cap is the APK cap, not the 64 KiB control-frame cap: a real APK is far larger.
+        if apk.is_empty() || apk.len() > apk_transfer::MAX_APK_LEN {
+            return Err(FacadeError::Malformed);
+        }
+        Ok(apk_transfer::send_update_to(
+            &addr,
+            Duration::from_secs(u64::from(timeout_secs)),
+            version,
+            &sig,
+            &apk,
+        )?)
     }
 
     /// Reports whether `mlock` took effect. The core cannot stop the OS from
@@ -494,6 +890,28 @@ impl Messenger {
 }
 
 impl Messenger {
+    fn from_parts(
+        identity: Identity,
+        public: IdentityPublic,
+        pins: HashMap<String, IdentityPublic>,
+        data_key: Option<Key32>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(State {
+                identity,
+                public,
+                sessions: HashMap::new(),
+                pins,
+                store: Store::new(),
+                listening: None,
+                pending_challenge: None,
+                data_key,
+                #[cfg(feature = "tor")]
+                tor: None,
+            }),
+        })
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, State>, FacadeError> {
         // A poisoned lock means a panic happened mid-update. Refuse to continue
         // rather than read half-updated ratchet state.
@@ -522,18 +940,69 @@ impl Messenger {
                 .map_err(|_| FacadeError::Network)?,
         );
         drop(listener); // one peer per listen call
+        self.respond_on_link(link, Some(&peer_id)).map(|_| ())
+    }
+
+    /// Initiator side of the handshake over an open link to the contact pinned as
+    /// `peer_id`. The link stays open for the session. Shared by every carrier.
+    pub(crate) fn initiate_on_link(
+        &self,
+        peer_id: String,
+        link: Arc<dyn Transport>,
+    ) -> Result<(), FacadeError> {
+        // The responder speaks first with its challenge; the handshake is built on it.
+        let challenge = wire::receive_challenge(link.as_ref())?;
+        let (init, root) = {
+            let st = self.lock()?;
+            let peer = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
+            handshake::initiate(&st.identity, peer, &challenge)?
+        };
+        wire::send_handshake(link.as_ref(), &init)?;
+        let session = session_for(
+            &root,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+            Some(link),
+        );
+        self.lock()?.sessions.insert(peer_id, Arc::new(session));
+        Ok(())
+    }
+
+    /// Responder side of the handshake over an open link. With `expected` set, the
+    /// caller must be that pinned contact. With `None`, the caller is whichever pinned
+    /// contact owns the long-term key in its handshake, and an unknown key is `NotPinned`.
+    /// Returns the contact's label. Shared by every carrier.
+    pub(crate) fn respond_on_link(
+        &self,
+        link: Arc<dyn Transport>,
+        expected: Option<&str>,
+    ) -> Result<String, FacadeError> {
+        // A fresh challenge per connection, sent before the initiator's handshake.
+        // The handshake must answer this one, so a captured handshake from an earlier
+        // connection fails its tag here and the live session is not replaced.
+        let challenge = handshake::new_challenge();
+        wire::send_challenge(link.as_ref(), &challenge)?;
         let init = wire::receive_handshake(link.as_ref())?;
         let mut st = self.lock()?;
+        let peer_id = match expected {
+            Some(label) => label.to_owned(),
+            None => st
+                .pins
+                .iter()
+                .find(|(_, pinned)| pinned.x25519 == init.initiator_x25519)
+                .map(|(label, _)| label.clone())
+                .ok_or(FacadeError::NotPinned)?,
+        };
         let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
-        let root = handshake::respond(&st.identity, &pinned, &init)?;
+        let root = handshake::respond(&st.identity, &pinned, &init, &challenge)?;
         let session = session_for(
             &root,
             RESPONDER_TO_INITIATOR,
             INITIATOR_TO_RESPONDER,
             Some(link),
         );
-        st.sessions.insert(peer_id, Arc::new(session));
-        Ok(())
+        st.sessions.insert(peer_id.clone(), Arc::new(session));
+        Ok(peer_id)
     }
 }
 
@@ -547,6 +1016,11 @@ fn pin_or_check(st: &mut State, peer_id: &str, peer: &IdentityPublic) -> Result<
             Ok(())
         }
     }
+}
+
+/// Whether the session's link is carried over Tor.
+fn runs_over_tor(session: &Session) -> bool {
+    session.link.as_ref().is_some_and(|link| link.is_onion())
 }
 
 fn lock_ratchet(
@@ -580,6 +1054,7 @@ fn to_core_public(p: PublicIdentity) -> Result<IdentityPublic, FacadeError> {
     Ok(IdentityPublic {
         x25519: to_array32(&p.x25519)?,
         mlkem_ek: p.mlkem_ek,
+        onion: to_array32(&p.onion)?,
     })
 }
 
@@ -611,8 +1086,69 @@ mod update_facade_tests {
         let m = Messenger::new();
         assert_eq!(m.developer_key_fingerprint(), None);
         assert_eq!(
-            m.verify_update(b"apk".to_vec(), vec![0u8; 64]),
+            m.verify_update(b"apk".to_vec(), 2, vec![0u8; 64], 1),
             Err(FacadeError::AuthFailed)
         );
+    }
+}
+
+#[cfg(all(test, feature = "tor"))]
+mod tor_session_tests {
+    use super::*;
+    use crate::tor::{OwnedRuntime, StreamTransport};
+    use tokio_util::compat::TokioAsyncReadCompatExt;
+
+    fn paired() -> (Arc<Messenger>, Arc<Messenger>) {
+        let a = Messenger::new();
+        let b = Messenger::new();
+        a.scan_pairing("b".into(), b.own_pairing_payload(String::new()).unwrap())
+            .unwrap();
+        b.scan_pairing("a".into(), a.own_pairing_payload(String::new()).unwrap())
+            .unwrap();
+        (a, b)
+    }
+
+    /// Opens an onion-style session between the two over an in-memory pipe.
+    fn link_over_pipe(a: &Arc<Messenger>, b: &Arc<Messenger>) -> Arc<OwnedRuntime> {
+        let rt = Arc::new(OwnedRuntime::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap(),
+        ));
+        let (x, y) = tokio::io::duplex(1024 * 1024);
+        let keep: Arc<dyn std::any::Any + Send + Sync> = rt.clone();
+        let xa = StreamTransport::new(rt.handle(), x.compat()).keep_alive(Arc::clone(&keep));
+        let yb = StreamTransport::new(rt.handle(), y.compat()).keep_alive(keep);
+        let b2 = Arc::clone(b);
+        let responder = std::thread::spawn(move || b2.respond_on_link(Arc::new(yb), None));
+        a.initiate_on_link("b".into(), Arc::new(xa)).unwrap();
+        assert_eq!(responder.join().unwrap().unwrap(), "a");
+        rt
+    }
+
+    #[test]
+    fn stopping_tor_ends_the_sessions_that_ran_over_it() {
+        let (a, b) = paired();
+        let _rt = link_over_pipe(&a, &b);
+        assert_eq!(a.linked_peers().unwrap(), vec!["b".to_string()]);
+        a.tor_stop().unwrap();
+        assert!(a.peers().unwrap().is_empty(), "a Tor session outlived Tor");
+        assert!(a.linked_peers().unwrap().is_empty());
+        // The other phone's session is its own business and is untouched.
+        assert_eq!(b.peers().unwrap(), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn stopping_tor_leaves_in_process_sessions_alone() {
+        let (a, b) = paired();
+        let c = b.responder_challenge().unwrap();
+        let init = a
+            .start_session("b".into(), b.own_identity().unwrap(), c.clone())
+            .unwrap();
+        b.accept_session("a".into(), init, c).unwrap();
+        a.tor_stop().unwrap();
+        assert_eq!(a.peers().unwrap(), vec!["b".to_string()]);
     }
 }

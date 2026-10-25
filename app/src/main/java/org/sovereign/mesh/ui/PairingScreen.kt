@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.dp
 import org.sovereign.mesh.SovereignApp
 import org.sovereign.mesh.core.PairingOutcome
 import org.sovereign.mesh.core.keyChangedWarning
+import uniffi.rust_core.FacadeException
+import uniffi.rust_core.PairingAssembler
 
 /**
  * Pairing screen: shows this phone's QR code, scans the other phone's, and
@@ -34,12 +36,16 @@ import org.sovereign.mesh.core.keyChangedWarning
 @Composable
 fun PairingScreen(onBack: () -> Unit) {
     val core = SovereignApp.core
-    val payload = remember { core.ownPairingPayload() }
+    // The payload is split across two QR codes (PLAN.md Decisions, 2026-10-24, QR decode).
+    val parts = remember { core.ownPairingParts() }
     val ownFingerprint = remember { core.ownFingerprint() }
     var name by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
     var outcome by remember { mutableStateOf<PairingOutcome?>(null) }
     var pinned by remember { mutableStateOf(core.pinnedPeers()) }
+    var assembler by remember { mutableStateOf<PairingAssembler?>(null) }
+    var received by remember { mutableStateOf(0) }
+    var total by remember { mutableStateOf(0) }
 
     Column(
         modifier = Modifier
@@ -52,10 +58,14 @@ fun PairingScreen(onBack: () -> Unit) {
         Text("Pair a contact", style = MaterialTheme.typography.titleLarge)
 
         Text("Your code", style = MaterialTheme.typography.titleMedium)
-        QrCode(payload)
+        parts.forEachIndexed { index, part ->
+            Text("Code ${index + 1} of ${parts.size}", style = MaterialTheme.typography.bodyMedium)
+            QrCode(part)
+        }
         Text("Your fingerprint: $ownFingerprint", style = MaterialTheme.typography.bodyMedium)
         Text(
-            "Show this code to the other person in person. Do not send it over any network.",
+            "Show every code to the other person in person, one after another. " +
+                "Do not send them over any network.",
             style = MaterialTheme.typography.bodySmall,
         )
 
@@ -70,6 +80,9 @@ fun PairingScreen(onBack: () -> Unit) {
         Button(
             onClick = {
                 outcome = null
+                assembler = core.newPairingAssembler()
+                received = 0
+                total = 0
                 scanning = true
             },
             enabled = name.isNotBlank() && !scanning,
@@ -79,13 +92,35 @@ fun PairingScreen(onBack: () -> Unit) {
 
         if (scanning) {
             val peer = name.trim()
+            // Each decoded part goes to the assembler. Only the complete payload pins, so one
+            // code alone never reaches scanPairing. A part that is refused changes nothing.
             PairingScanner(
-                onPayload = { bytes ->
-                    scanning = false
-                    outcome = core.scanPairing(peer, bytes)
-                    pinned = core.pinnedPeers()
+                onPart = { part ->
+                    val collector = assembler
+                    if (collector != null) {
+                        val full = try {
+                            collector.addPart(part)
+                        } catch (e: FacadeException) {
+                            null
+                        }
+                        received = collector.received().toInt()
+                        total = collector.total().toInt()
+                        if (full != null) {
+                            scanning = false
+                            outcome = core.scanPairing(peer, full)
+                            pinned = core.pinnedPeers()
+                        }
+                    }
                 },
                 onCancel = { scanning = false },
+            )
+            Text(
+                if (total == 0) {
+                    "Point the camera at one of their codes."
+                } else {
+                    "Scanned $received of $total codes. Keep scanning until all are read."
+                },
+                style = MaterialTheme.typography.bodyMedium,
             )
         }
 

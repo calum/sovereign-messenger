@@ -1,7 +1,11 @@
 package org.sovereign.mesh.core
 
+import uniffi.rust_core.FacadeException
 import uniffi.rust_core.LockReport
 import uniffi.rust_core.Messenger
+import uniffi.rust_core.PairingAssembler
+import uniffi.rust_core.TorRole
+import uniffi.rust_core.TorStatus
 
 /**
  * Kotlin side of the Rust core. The Rust `Messenger` is the only holder of
@@ -12,7 +16,23 @@ import uniffi.rust_core.Messenger
  * calls that block (`connect`, `listen`, `receiveOnce`) must run off the UI
  * thread. Errors are thrown as [FacadeException]; they carry no message content.
  */
-class CoreBridge(private val messenger: Messenger = Messenger()) {
+class CoreBridge(
+    private val messenger: Messenger = Messenger(),
+    private val vault: IdentityVault? = null,
+) {
+    /**
+     * True if the last attempt to store the identity and pins failed. They are still
+     * usable in memory, but a restart would lose the change. Read by the chat list.
+     */
+    @Volatile
+    var saveFailed: Boolean = false
+        private set
+
+    /** Stores the identity and pins after a change. Messages are never stored. */
+    private fun persist() {
+        val v = vault ?: return
+        saveFailed = !v.save(messenger)
+    }
 
     fun peers(): List<String> = messenger.peers()
 
@@ -60,11 +80,59 @@ class CoreBridge(private val messenger: Messenger = Messenger()) {
     /** Payload bytes for this phone's QR code. Built by rust-core; Kotlin only renders them. */
     fun ownPairingPayload(): ByteArray = messenger.ownPairingPayload("")
 
+    /** The QR parts for this phone's code. Show each one as its own QR code. */
+    fun ownPairingParts(): List<ByteArray> = messenger.ownPairingParts("")
+
+    /** A fresh collector for one scan. Feed it every scanned part; it returns the payload when complete. */
+    fun newPairingAssembler(): PairingAssembler = PairingAssembler()
+
     fun ownFingerprint(): String = messenger.ownFingerprint()
+
+    /** This phone's onion address. Public; it is also in the QR code. */
+    fun ownOnionAddress(): String = messenger.ownOnionAddress()
+
+    /** The onion address pinned for [peer] from their QR code, or null. */
+    fun pinnedOnionAddress(peer: String): String? = messenger.pinnedOnionAddress(peer)
+
+    /** Tor progress for the status line. Cheap; safe to poll from the UI. */
+    fun torStatus(): TorStatus = messenger.torStatus()
+
+    /** Starts Tor and this phone's onion service in the background. [stateDir] is app-private. */
+    fun startTor(stateDir: String) {
+        messenger.torStart(stateDir)
+    }
+
+    fun stopTor() {
+        messenger.torStop()
+    }
+
+    /** Whether this phone dials [peer] or waits for the call. Only one side of a pair dials. */
+    fun torRole(peer: String): TorRole = messenger.torRole(peer)
+
+    /** Contacts being dialled right now, so one contact is never dialled twice at once. */
+    private val dialling = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Dials [peer]'s onion address and runs the handshake. Blocking, possibly minutes. A second
+     * call for the same contact while one is running is refused: two dials would each make a
+     * session and the later would replace the earlier, leaving the phones on different links.
+     */
+    fun connectTor(peer: String) {
+        if (!dialling.add(peer)) throw FacadeException.Network("already dialling")
+        try {
+            messenger.connectPeerTor(peer)
+        } finally {
+            dialling.remove(peer)
+        }
+    }
+
+    /** Waits for any pinned contact to call, and returns their label. Blocking. */
+    fun acceptTor(timeoutSecs: Int): String = messenger.acceptPeerTor(timeoutSecs.toUInt())
 
     /** Pins a scanned identity under [peer]. A changed key is refused and reported, never applied. */
     fun scanPairing(peer: String, payload: ByteArray): PairingOutcome =
         pairingOutcome(peer) { messenger.scanPairing(peer, payload) }
+            .also { if (it is PairingOutcome.Pinned) persist() }
 
     fun pinnedPeers(): List<String> = messenger.pinnedPeers()
 
@@ -73,6 +141,7 @@ class CoreBridge(private val messenger: Messenger = Messenger()) {
     /** The user checked the new key in person and accepts it. The next scan pins it. */
     fun acceptNewKey(peer: String) {
         messenger.unpin(peer)
+        persist()
     }
 
     /**
@@ -83,9 +152,19 @@ class CoreBridge(private val messenger: Messenger = Messenger()) {
 
     /**
      * Listens on [bindAddr] for one sender and returns the APK bytes only if their
-     * signature verifies against the compiled-in developer key. Blocking; the caller
-     * runs it off the UI thread. Throws [FacadeException] otherwise.
+     * signature verifies over the version the sender announced, and that version is
+     * strictly newer than [installedVersion] (the installed version code). Blocking;
+     * the caller runs it off the UI thread. Throws [FacadeException] otherwise.
      */
-    fun receiveUpdate(bindAddr: String, timeoutSecs: Int): ByteArray =
-        messenger.receiveUpdate(bindAddr, timeoutSecs.toUInt()).apk
+    fun receiveUpdate(bindAddr: String, timeoutSecs: Int, installedVersion: Long): ByteArray =
+        messenger.receiveUpdate(bindAddr, timeoutSecs.toUInt(), installedVersion.toULong()).apk
+
+    /**
+     * Forwards one developer-signed bundle to the phone at [addr]: the APK, its
+     * 64-byte signature and the version. This phone does not sign. Blocking; the
+     * caller runs it off the UI thread. Throws [FacadeException] on refusal or
+     * network failure. The receiver verifies the bundle before it offers install.
+     */
+    fun sendUpdate(addr: String, timeoutSecs: Int, apk: ByteArray, version: Long, signature: ByteArray) =
+        messenger.sendUpdate(addr, timeoutSecs.toUInt(), apk, version.toULong(), signature)
 }

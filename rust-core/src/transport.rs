@@ -46,6 +46,24 @@ pub trait Transport: Send + Sync {
     /// Returns `Ok(None)` if nothing arrived within the poll interval. Returns
     /// an error, never a partial frame, when the link is gone.
     fn receive(&self) -> Result<Option<Vec<u8>>, TransportError>;
+
+    /// How long the handshake helpers wait for each frame on this link before giving up.
+    /// A carrier with more latency than a LAN socket (Tor) overrides this.
+    fn handshake_deadline(&self) -> Duration {
+        Duration::from_secs(10)
+    }
+
+    /// How long the responder waits for the initiator's handshake after sending its challenge.
+    /// A caller who connects and says nothing costs a worker this long, so a carrier that
+    /// anyone can reach (an onion service) sets it shorter than the general deadline.
+    fn responder_deadline(&self) -> Duration {
+        self.handshake_deadline()
+    }
+
+    /// True for a link carried over Tor. Ending Tor ends the sessions on such links.
+    fn is_onion(&self) -> bool {
+        false
+    }
 }
 
 /// One TCP connection. Each frame is a 4-byte big-endian length, then the body.

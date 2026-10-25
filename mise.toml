@@ -18,6 +18,18 @@ run = [
   "cargo clippy --manifest-path rust-core/Cargo.toml --all-targets -- -D warnings",
 ]
 
+[tasks."rust:test:tor"]
+description = "Run rust-core tests with the Tor feature compiled in (no network needed)"
+run = "cargo test --manifest-path rust-core/Cargo.toml --features tor"
+
+[tasks."rust:lint:tor"]
+description = "Clippy with warnings as errors, Tor feature on"
+run = "cargo clippy --manifest-path rust-core/Cargo.toml --features tor --all-targets -- -D warnings"
+
+[tasks."rust:live"]
+description = "LIVE Tor tests: reach the real Tor network, take minutes, ignored by default"
+run = "cargo test --manifest-path rust-core/Cargo.toml --features tor --test tor_live -- --ignored --nocapture --test-threads=1"
+
 [tasks."rust:clean"]
 description = "Remove rust-core build output"
 run = "cargo clean --manifest-path rust-core/Cargo.toml"
@@ -25,10 +37,14 @@ run = "cargo clean --manifest-path rust-core/Cargo.toml"
 [tasks."rust:android"]
 description = "Cross-compile rust-core for arm64-v8a and x86_64 into app/src/main/jniLibs (needs the NDK)"
 run = "bash rust-core/scripts/build-android.sh"
+# On Windows `bash` on PATH is often WSL's bash, which sees a Linux machine and looks for the NDK
+# under /home. Call Git Bash by its full path instead.
+run_windows = '"%ProgramFiles%\Git\bin\bash.exe" rust-core/scripts/build-android.sh'
 
 [tasks."rust:bindings"]
 description = "Regenerate the UniFFI Kotlin bindings after changing rust-core/src/ffi.rs"
 run = "bash rust-core/scripts/gen-kotlin.sh"
+run_windows = '"%ProgramFiles%\Git\bin\bash.exe" rust-core/scripts/gen-kotlin.sh'
 
 [tasks."android:debug"]
 description = "Build the debug APK"
@@ -45,6 +61,10 @@ description = "Run Android JVM unit tests"
 run = "./gradlew :app:testDebugUnitTest"
 run_windows = ".\\gradlew.bat :app:testDebugUnitTest"
 
+[tasks."android:share"]
+description = "Serve the debug APK on the Wi-Fi address with a QR code, for installing on a phone (Windows; Ctrl+C stops)"
+run_windows = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\serve-apk.ps1"
+
 [tasks."android:install"]
 description = "Install the debug APK on a connected device over adb"
 depends = ["android:debug"]
@@ -52,11 +72,11 @@ run = "adb install -r app/build/outputs/apk/debug/app-debug.apk"
 
 [tasks.test]
 description = "Run every test suite"
-depends = ["rust:test", "android:test"]
+depends = ["rust:test", "rust:test:tor", "android:test"]
 
 [tasks.check]
 description = "Lint everything, then run all tests"
-depends = ["rust:lint", "test"]
+depends = ["rust:lint", "rust:lint:tor", "test"]
 
 [tasks.clean]
 description = "Remove all build output"

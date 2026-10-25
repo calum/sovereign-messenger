@@ -17,8 +17,11 @@ fn paired() -> (Arc<Messenger>, Arc<Messenger>) {
     )
     .unwrap();
     let bob_id = bob.own_identity().unwrap();
-    let init = alice.start_session("bob".into(), bob_id).unwrap();
-    bob.accept_session("alice".into(), init).unwrap();
+    let c = bob.responder_challenge().unwrap();
+    let init = alice
+        .start_session("bob".into(), bob_id, c.clone())
+        .unwrap();
+    bob.accept_session("alice".into(), init, c).unwrap();
     (alice, bob)
 }
 
@@ -86,19 +89,24 @@ fn wrong_identity_cannot_read_session() {
     let bob = Messenger::new();
     let eve = Messenger::new();
     // Alice meant Bob's key, but Eve answers the handshake. Eve has pinned Alice,
-    // so the handshake passes the pin check and only the derived root differs.
+    // so the handshake passes the pin check. The key-confirmation tag then fails,
+    // because Eve derived a different root, and Eve stores no session.
     eve.scan_pairing(
         "alice".into(),
         alice.own_pairing_payload(String::new()).unwrap(),
     )
     .unwrap();
+    let c = eve.responder_challenge().unwrap();
     let init = alice
-        .start_session("bob".into(), bob.own_identity().unwrap())
+        .start_session("bob".into(), bob.own_identity().unwrap(), c.clone())
         .unwrap();
-    eve.accept_session("alice".into(), init).unwrap();
-
+    assert_eq!(
+        eve.accept_session("alice".into(), init, c),
+        Err(FacadeError::AuthFailed)
+    );
+    assert!(eve.peers().unwrap().is_empty());
     let m = alice.send("bob".into(), "for bob only".into()).unwrap();
-    assert_eq!(eve.receive("alice".into(), m), Err(FacadeError::AuthFailed));
+    assert_eq!(eve.receive("alice".into(), m), Err(FacadeError::NoSession));
 }
 
 #[test]
@@ -113,7 +121,9 @@ fn unknown_peer_and_malformed_identity_rejected() {
     let mut bad = carol.own_identity().unwrap();
     bad.x25519.truncate(31);
     assert_eq!(
-        alice.start_session("carol".into(), bad).map(|_| ()),
+        alice
+            .start_session("carol".into(), bad, vec![0u8; 32])
+            .map(|_| ()),
         Err(FacadeError::Malformed)
     );
 }

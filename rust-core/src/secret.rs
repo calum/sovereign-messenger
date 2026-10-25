@@ -27,10 +27,11 @@ impl SecretBytes {
 
 impl Drop for SecretBytes {
     fn drop(&mut self) {
+        // Zero the bytes, but do not `munlock`. On Linux and Android munlock is not
+        // reference counted per page, so unlocking here could unlock a live
+        // neighbour that shares the page. Locked pages stay locked until exit
+        // (Decisions, 2026-10-24, munlock). Cost: a little more RAM stays locked.
         self.buf.zeroize();
-        if self.locked {
-            unlock(&self.buf);
-        }
     }
 }
 
@@ -48,24 +49,10 @@ fn lock(buf: &[u8]) -> bool {
     unsafe { libc::mlock(buf.as_ptr() as *const libc::c_void, buf.len()) == 0 }
 }
 
-#[cfg(unix)]
-fn unlock(buf: &[u8]) {
-    if buf.is_empty() {
-        return;
-    }
-    // SAFETY: same region that was locked in `lock`.
-    unsafe {
-        libc::munlock(buf.as_ptr() as *const libc::c_void, buf.len());
-    }
-}
-
 #[cfg(not(unix))]
 fn lock(_buf: &[u8]) -> bool {
     false
 }
-
-#[cfg(not(unix))]
-fn unlock(_buf: &[u8]) {}
 
 /// Test-only probes that report whether a type implements `Clone` or `Debug`.
 /// Inherent associated consts are selected only when their bound holds, so

@@ -15,35 +15,45 @@ COMPONENTS
   - ffi.rs        UniFFI facade: Messenger object, the only surface Kotlin calls
   - transport.rs  Transport trait; TcpTransport (length-prefixed frames, 64 KiB cap)
   - wire.rs       handshake and ratchet frame layout; send and receive helpers
+  - pairing.rs    QR payload v2 (identity keys and onion key), fingerprint, two-part split
+  - vault.rs      encrypted identity vault: identity secrets and pins sealed under a data key (ChaCha20-Poly1305)
+  - onion.rs      v3 onion address encode and parse, checked against arti's addresses
+  - tor.rs        Tor carrier (cargo feature `tor`, arti 0.47 pinned): framing over an onion stream and TorNode, whose service key is held in memory only
+  - apk_transfer.rs  APK transfer over local Wi-Fi
   - scripts/      build-android.sh (NDK cross-compile), gen-kotlin.sh (bindings)
 - app/           Android app, Kotlin + Jetpack Compose, minSdk 29, targetSdk 35, package org.sovereign.mesh
   - MainActivity: FLAG_SECURE, wipes core on stop
-  - core/CoreBridge: forwards to generated UniFFI bindings (uniffi/rust_core); connect, listen, send, receive over TCP
+  - core/CoreBridge: forwards to generated UniFFI bindings (uniffi/rust_core); connect, listen, send, receive over TCP, plus Tor calls
+  - core/IdentityVault, AndroidKeystoreWrapper: store the sealed identity; the Keystore wraps the data key
+  - core/TorController, TorUi: start Tor, show its status, accept calls, decide when to dial
   - ui/: TourScreen, ChatListScreen, ChatScreen (connect or wait for contact, send, receive loop)
 
 WORKS TODAY
-- 75 Rust tests pass (mise run rust:test): 28 unit, 12 pairing, 7 round trip, 8 transport, 3 session over TCP, 6 facade over TCP, 9 handshake auth, 2 send counter
+- 207 Rust tests pass (mise run rust:test), 239 with the Tor feature (mise run rust:test:tor); 3 live Tor tests are ignored by default (mise run rust:live)
 - clippy -D warnings and fmt clean (mise run rust:lint)
-- debug APK builds with libuniffi_rust_core.so for arm64-v8a and x86_64
-- 20 JVM tests pass through JNA (mise run android:test), including a loopback message over TCP. The QR round trip test has failed intermittently; see PLAN.md
+- debug APK builds with librust_core.so for arm64-v8a and x86_64
+- 96 JVM tests pass through JNA (mise run android:test), including a loopback message over TCP
+- live test on a laptop: two identities connected over the real Tor network and exchanged a message (PLAN.md, Tor live results)
+- the app installs and starts on one phone (owner report)
 
 NOT DONE
-- Tor v3 onion services: not implemented (ruling in PLAN.md Decisions)
-- TCP transport between two phones: not run; loopback only
-- running the native library or the chat screen on a device or emulator: not done
+- Tor between two phones, and Tor on Android at all: not run. No claim of privacy from a network observer until PLAN.md T4 passes
+- any transport between two phones: not run
+- the Keystore vault, camera scanner and chat screen on a device: not checked
 - handshake authentication of the initiator: done via static-static DH and the responder's pin (PLAN.md Decisions, 2026-10-24); not independently reviewed; no key-confirmation message; both phones must scan each other's QR first
 - QR onboarding camera scan on a device, APK transfer between phones, signed-update delivery: not verified or not started
 - ratchet DH step (post-compromise security): implemented in double_ratchet.rs; standard construction, tested in Rust, not independently reviewed; limits in PLAN.md Decisions (2026-10-24)
 
 CONSTRAINTS FOR CHANGES
-- never write message/key data to disk
+- never write messages to disk; the identity and pinned contacts only as the encrypted vault; Tor's public cache only under filesDir/tor (CLAUDE.md rule 1)
 - zeroize every type that holds secrets
 - no plaintext in logs or errors
 - keep allowBackup=false and FLAG_SECURE
 - use existing RustCrypto crates; do not invent primitives
 
 COMMANDS
-- mise run rust:test | rust:lint | check | android:debug | android:release | android:install
+- mise run rust:test | rust:test:tor | rust:lint | rust:lint:tor | rust:live | rust:android | check | android:debug | android:share | android:release | android:install
+- Windows: copy mise.local.toml.example to mise.local.toml (NDK and JDK paths); the native build runs under Git Bash
 - Windows: JAVA_HOME must point at JDK 17; system JDK 11 is too old
 
-SEE ALSO: README.md (status and setup), PLAN.md (checklist, kept current), CLAUDE.md (rules for AI assistants)
+SEE ALSO: README.md (overview and diagrams), docs/status.md (detailed status), docs/setup.md (setup and building), PLAN.md (checklist, kept current), CLAUDE.md (rules for AI assistants)

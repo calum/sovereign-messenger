@@ -75,7 +75,7 @@ class TransportLoopbackTest {
     fun sendWithoutAnOpenConnectionIsRefused() {
         val alice = Messenger()
         val bob = Messenger()
-        alice.startSession("bob", bob.ownIdentity())
+        alice.startSession("bob", bob.ownIdentity(), bob.responderChallenge())
         val core = CoreBridge(alice)
         assertThrows(FacadeException.NoLink::class.java) {
             core.send("bob", "not on the wire")

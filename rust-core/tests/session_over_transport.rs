@@ -29,8 +29,11 @@ fn handshake_then_ratchet_both_directions_over_tcp() {
     let (alice, alice_pub) = Identity::generate();
 
     let responder = std::thread::spawn(move || {
+        // The responder speaks first: its challenge must arrive before the handshake.
+        let challenge = handshake::new_challenge();
+        wire::send_challenge(&server, &challenge).unwrap();
         let init = wire::receive_handshake(&server).unwrap();
-        let root = handshake::respond(&me, &alice_pub.x25519, &init).unwrap();
+        let root = handshake::respond(&me, &alice_pub.x25519, &init, &challenge).unwrap();
         let mut session = DoubleRatchet::new(&root, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
         let heard = wire::receive_message(&server, &mut session).unwrap();
         assert_eq!(heard, b"hello bob".to_vec());
@@ -38,7 +41,8 @@ fn handshake_then_ratchet_both_directions_over_tcp() {
         server
     });
 
-    let (init, root) = handshake::initiate(&alice, &public).unwrap();
+    let challenge = wire::receive_challenge(&client).unwrap();
+    let (init, root) = handshake::initiate(&alice, &public, &challenge).unwrap();
     wire::send_handshake(&client, &init).unwrap();
     let mut session = DoubleRatchet::new(&root, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
     wire::send_message(&client, &mut session, b"hello bob").unwrap();
