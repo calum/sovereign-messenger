@@ -63,6 +63,18 @@ Install `app/build/outputs/apk/debug/app-debug.apk`. To install it on the phone 
 
 ### B1. The app starts and the native library loads
 
+Status 2026-10-25: the first install crashed at launch because the library was named wrongly.
+That is fixed. After `git pull` you must rebuild the native library, because a `jniLibs` folder
+from before the fix makes the build stop with a message naming the two files; this is on purpose.
+
+```bash
+git pull
+mise run rust:android
+mise run android:debug
+mise run android:share     # then reinstall on the phone
+```
+
+
 Pass: the app opens with no crash. (A crash with `UnsatisfiedLinkError` is the one to report.)
 
 ### B2. The identity survives a restart

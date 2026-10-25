@@ -24,7 +24,7 @@ COMPONENTS
 WORKS TODAY
 - 75 Rust tests pass (mise run rust:test): 28 unit, 12 pairing, 7 round trip, 8 transport, 3 session over TCP, 6 facade over TCP, 9 handshake auth, 2 send counter
 - clippy -D warnings and fmt clean (mise run rust:lint)
-- debug APK builds with libuniffi_rust_core.so for arm64-v8a and x86_64
+- debug APK builds with librust_core.so for arm64-v8a and x86_64
 - 20 JVM tests pass through JNA (mise run android:test), including a loopback message over TCP. The QR round trip test has failed intermittently; see PLAN.md
 
 NOT DONE
