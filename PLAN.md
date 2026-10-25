@@ -123,6 +123,18 @@ Status: planned, not built. The owner's direction supersedes the 2026-10-24 Tor 
 
 Next step for the owner: decide whether to retry T0 on another network (for example, mobile data on the same machine), or accept that T0 is blocked here. Either way, T0 is not PASSED, and T1 and later stay gated.
 
+## T0 spike results (cloud retry, 2026-10-25)
+
+**Status: NOT PASSED. Blocked by the environment, not by arti. This run does not show that arti works or fails.** The spike built and started, but the cloud container cannot complete a Tor channel handshake, so no onion service was launched and no round trip ran. Per the brief, the Android build was not attempted and Orbot was not tried.
+
+- Where it ran: the Claude Code cloud container (Linux x86_64, 4 cores, rustc/cargo 1.97.0), branch `plan/complete-remaining` at `2dc3f86`, crate `spikes/t0-arti` unchanged. Fresh state directories in the scratchpad (mode 0700; arti refuses 0755). No Sovereign Mesh keys or `.sovereign-dev` data were used.
+- Build: `cargo build` of the spike succeeded in 1m46s (debug, unoptimised, 271 MB binary; this is not a size measurement for the Android `.so`).
+- Bootstrap time: not measured. Bootstrap reached 8% ("handshaking with Tor relays; directory is fetching a consensus") and stayed there. After 60 s arti reported "Stuck at 8%: our internet connection seems to be filtered", and again at 121 s. dirmgr logged "Tried to find or build a tunnel 16 times, but all attempts failed".
+- Onion publish time, onion address, round trip, aarch64-linux-android build and `.so` size: not run (gate stop).
+- Cause found: every outbound TCP connection from the container goes through an egress gateway that terminates TLS and presents its own certificate (issuer `O = Anthropic, CN = Egress Gateway SDS Issuing CA`). I saw this on a Tor relay at `45.66.35.35:443` and on a directory authority at `171.25.193.9:80`. Tor's channel handshake cannot succeed through a TLS-terminating proxy, and `128.31.0.34:9131` timed out. This is a property of this sandbox, so a Tor result from here is not evidence about phones on mobile data.
+- Effect on the earlier Windows result: the 15% stall seen on the owner's machine is a different symptom (channels came up there, the consensus never arrived) and is still unexplained. Two failures in two environments do not establish that arti 0.47 is broken, and they do not establish that it works.
+- What would settle it: run `target/debug/t0-arti server <dir>` and `client <dir> <onion>` on a host with unfiltered outbound TCP (a home connection other than the Windows machine's network, or a VPS), then the `aarch64-linux-android` build and a phone run on mobile data.
+
 ## Decisions
 
 - **2026-10-24, identity lifetime:** the identity is generated when the process starts (`SovereignApp` creates `CoreBridge`, which creates `Messenger`) and is never written to disk. Closing the app discards it, so every contact must scan a new QR code after a cold start. Cost if wrong: more pairing for the user; the key is not stored anywhere, so storage cannot leak it.
