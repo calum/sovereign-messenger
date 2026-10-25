@@ -2,7 +2,7 @@
 
 This plan is updated as work is done. Checked items are verified in the repo; unchecked items are not started or not verified. Each change to the plan should say what changed and why.
 
-_Last updated: 2026-10-25 (encrypted identity persistence, T0 results, Tor transport T1 to T3 written; see Decisions and `docs/owner-test-list.md`)._
+_Last updated: 2026-10-25 (the app starts on a phone; encrypted identity persistence, Tor transport and live Tor results; see Decisions and `docs/owner-test-list.md`)._
 
 ## Done
 
@@ -25,7 +25,7 @@ _Last updated: 2026-10-25 (encrypted identity persistence, T0 results, Tor trans
 
 ## In progress
 
-- [ ] Owner testing of the pre-release (see section 8)
+- [ ] Owner testing: one phone first (B), then two phones over Tor with the owner's father (C); steps in `docs/owner-test-list.md`
 
 ## Left to do
 
@@ -46,7 +46,7 @@ _Last updated: 2026-10-25 (encrypted identity persistence, T0 results, Tor trans
 - [x] Delete-identity action. Verified by the JVM tests above for the file and key removal. The dialog and card in `ChatListScreen` compile and are not seen on a device.
 
 ### 3. Transport
-- [x] Choose the Tor implementation. Ruling: Tor is not implemented in this pass; arti is not a dependency. Evidence and cost are in Decisions (2026-10-24, Tor ruling). Verified by reading the arti-client 0.47.0 crate metadata and the Arti 2.5.1 release notes.
+- [x] Choose the Tor implementation. SUPERSEDED 2026-10-25: the owner chose arti and it is built (see "Next: Tor transport" and Decisions). Original ruling: Tor is not implemented in this pass; arti is not a dependency. Evidence and cost are in Decisions (2026-10-24, Tor ruling). Verified by reading the arti-client 0.47.0 crate metadata and the Arti 2.5.1 release notes.
 - [x] Local P2P socket transport behind a trait, so Tor can be swapped in. Verified: `rust-core/src/transport.rs` (`Transport` trait, 64 KiB frame cap, TCP on the LAN). Tests: 8 in `tests/transport.rs` (loopback frames, closed peer, oversize refused on send and on prefix, truncated frame, idle, accept timeout). Loopback only; not run between two phones.
 - [x] Send and receive the handshake and ratchet messages over the transport. Verified: `rust-core/src/wire.rs` frames; 3 tests in `tests/session_over_transport.rs` (handshake then ratchet both ways over TCP, tampered frame rejected, shortened length prefix fails authentication); 5 facade tests in `tests/transport_facade.rs`; 4 JVM tests in `TransportLoopbackTest.kt` through `CoreBridge`. Loopback only.
 - [x] Authenticate the initiator (the auth gap in Decisions, 2026-10-24). Verified: static-static X25519 DH between the two identity keys is mixed into the root in `rust-core/src/handshake.rs`; `respond` refuses any initiator key other than the pinned one with `CoreError::Auth`; `accept_session` and `listen_for_peer` refuse an unpinned peer with `NotPinned`. Tests: 4 unit tests in `handshake.rs` and 9 in `tests/handshake_auth.rs` (pinned success; other initiator key refused; wrong responder key cannot complete; tampered static, ephemeral and ML-KEM bytes; facade no-pin and wrong-key refusals). Each phone must now scan the other's QR code before a session opens. Not independently reviewed. Not run between two phones.
@@ -81,7 +81,7 @@ Findings and evidence are in `docs/hardening-review.md`.
 
 ## Next: Tor transport (owner direction, 2026-10-25)
 
-Status: planned, not built. The owner's direction supersedes the 2026-10-24 Tor ruling in Decisions, which deferred Tor. Nothing in this section is verified.
+Status 2026-10-25: T0 passed on a laptop, T1 to T3 are written and unit tested, and one live test on a laptop connected two identities over real Tor. T4 (two phones) has not been run and the privacy review (T5) is preliminary. The owner's direction supersedes the 2026-10-24 Tor ruling in Decisions, which deferred Tor.
 
 **Target behaviour**
 - Wi-Fi is used only to install the APK. Pairing and messaging need no shared network.
@@ -92,7 +92,7 @@ Status: planned, not built. The owner's direction supersedes the 2026-10-24 Tor 
 **Open decisions (owner, before any code)**
 1. **Identity lifetime. RESOLVED 2026-10-25 by the owner: identities persist forever on the device.** Re-entering them is impractical. CLAUDE.md rule 1 is updated to allow this, with encryption at rest (see Decisions). The onion service key is part of the identity, so the onion address is stable across launches.
 2. **Tor implementation. CHOSEN 2026-10-25: arti in-process (a), gated on the T0 spike.** The owner asked for whatever is most likely to meet the requirements. Its onion-service features and the `aarch64-linux-android` build are still unverified; if the spike fails, the fallback is to report back, not to switch to Orbot without a new decision.
-3. **Bootstrap wait.** Tor circuits can take many seconds to build. The UI must show "Tor: connecting" and must not send until the onion service is published. Confirm the owner accepts that delay.
+3. **Bootstrap wait.** Tor circuits can take many seconds to build. The UI must show "Tor: connecting" and must not send until the onion service is published. Measured on a laptop: first start 18 s to about 5 minutes to be ready, 20 s with saved state. The owner delegated acceptance of this delay on 2026-10-25; the app shows its state and waits.
 4. **CLAUDE.md. Rule 1 updated 2026-10-25 for persistent identities.** The Tor known-gap entry is still accurate until Tor exists, so it stays until T1 lands, in the same commit.
 
 **Steps (tests first, each with its failing test recorded)**
