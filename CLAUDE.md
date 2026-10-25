@@ -8,7 +8,7 @@ An experimental, peer-to-peer, RAM-only Android messenger for a closed group of 
 
 ## Hard rules
 
-1. **Messages are never written to disk.** No SQLite, no caches, no message files, no logs containing plaintext. Long-term identity keys and pinned contacts may be stored on the device (owner decision, 2026-10-25), but only encrypted at rest under a key held in the Android Keystore, and never in backups (rule 4). Any other persistence needs the owner's approval first.
+1. **Messages are never written to disk.** No SQLite, no caches, no message files, no logs containing plaintext. Long-term identity keys and pinned contacts may be stored on the device (owner decision, 2026-10-25), but only encrypted at rest under a key held in the Android Keystore, and never in backups (rule 4). The one other file allowed is the verified, developer-signed update APK, staged in `cacheDir/update/` only to hand it to the system installer (owner-delegated decision, 2026-10-25; it is public code and holds no message, key or contact data). `UpdateInstaller` deletes it when the update screen is closed, when a receive fails, and at app start. Any other persistence needs the owner's approval first.
 2. **Secrets are zeroized.** Any new type holding key material or plaintext must implement `Zeroize`/`ZeroizeOnDrop`, or wrap a `SecretBytes`. Do not `Clone` secret types casually.
 3. **No plaintext in logs, panics or errors.** Error messages in `CoreError` must not include key or message content.
 4. **Backups stay off.** Keep `android:allowBackup="false"` and the `data_extraction_rules.xml` exclusions.
