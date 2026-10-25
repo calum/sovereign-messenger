@@ -104,6 +104,25 @@ Status: planned, not built. The owner's direction supersedes the 2026-10-24 Tor 
 - Handshake, ratchet, pinning, update signing and RAM-only storage do not change.
 - The LAN transport stays as a test path, not as the product path, until T4 passes.
 
+## T0 spike results (2026-10-25)
+
+**Status: FAILED at the desktop gate (step 2).** Tor bootstrap never reached ready on this machine, so no onion service was launched and no round trip ran. Per the brief, the spike stopped there. The Android build (step 3) was not attempted. Phone test (step 4) is not done and remains owner work.
+
+- Spike crate: `scratchpad/t0-arti` (outside the repo). No product code, no tracked file changed except this section and the report file. Nothing committed.
+- arti-client: `0.47.0` (latest stable on crates.io at spike time). `default-features = false`.
+- Features enabled: `tokio`, `rustls`, `compression`, `onion-service-service`, `onion-service-client`. None is experimental. `launch_onion_service` is gated only by `onion-service-service`, not by `experimental-api`.
+- Extra spike-only deps needed to build or run on Windows: `libsqlite3-sys` with `bundled` (link failed with LNK1181 `sqlite3.lib` otherwise), `rustls` pinned to the `ring` provider (runtime panic without it), `tracing-subscriber` (diagnostics only).
+- Bootstrap time: not measured. Bootstrap stalled at 15% ("connecting successfully; directory is fetching a consensus") in four runs over about 25 minutes, across bash and PowerShell launches and at default and trace log levels. The state directory stayed at 65.7 KB and never grew.
+- Onion publish time: not measured. `launch_onion_service` was not reached.
+- Onion address: none produced.
+- Round trip (length-prefixed message each way, desktop, two processes): not run, so no result.
+- aarch64-linux-android build: not attempted (gate stop).
+- `.so` size: not applicable.
+- Trace evidence (run at `tor_proto=trace`): channel handshakes to three guards completed, and CREATE_FAST circuits were built. A directory stream was opened once, then output stopped. The consensus was never received. So the failure is in the directory fetch over Tor, not in TLS or channel setup.
+- Not determined: whether this is a host or network problem (no firewall or AV checks were run) or an arti 0.47 problem on this network. Both are open. Orbot or any other Tor implementation was not tried, per the brief.
+
+Next step for the owner: decide whether to retry T0 on another network (for example, mobile data on the same machine), or accept that T0 is blocked here. Either way, T0 is not PASSED, and T1 and later stay gated.
+
 ## Decisions
 
 - **2026-10-24, identity lifetime:** the identity is generated when the process starts (`SovereignApp` creates `CoreBridge`, which creates `Messenger`) and is never written to disk. Closing the app discards it, so every contact must scan a new QR code after a cold start. Cost if wrong: more pairing for the user; the key is not stored anywhere, so storage cannot leak it.
