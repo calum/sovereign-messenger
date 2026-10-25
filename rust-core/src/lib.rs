@@ -13,6 +13,8 @@ pub mod pairing;
 pub mod ratchet;
 pub mod secret;
 pub mod store;
+#[cfg(feature = "tor")]
+pub mod tor;
 pub mod transport;
 pub mod update;
 pub mod vault;

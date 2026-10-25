@@ -22,7 +22,7 @@
 //! refused by length or tag; a forged or altered chat message is refused by the
 //! ratchet's AEAD. The handshake frame carries public values only.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::double_ratchet::{header_bytes, header_from_bytes, DoubleRatchet, Message, HEADER_LEN};
 use crate::error::CoreError;
@@ -53,9 +53,6 @@ const CHALLENGE_FRAME_LEN: usize = 1 + CHALLENGE_LEN;
 /// Tag, then the ratchet header (49 bytes), then the ciphertext. A ChaCha20-Poly1305
 /// ciphertext is at least the 16-byte tag, so a message frame is at least 66 bytes.
 const MESSAGE_MIN_LEN: usize = 1 + HEADER_LEN + 16;
-
-/// How long a receive helper waits for a frame before giving up.
-const RECEIVE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Layout: `[tag 0x01][ephemeral 32][initiator static 32][ML-KEM ct 1088][confirmation tag 32]`.
 pub fn encode_handshake(init: &HandshakeInit) -> Vec<u8> {
@@ -183,7 +180,7 @@ pub fn open_frame(session: &mut DoubleRatchet, frame: &[u8]) -> Result<Vec<u8>, 
 
 /// Waits for the next frame, looping over idle polls until a deadline.
 fn next_frame(link: &dyn Transport) -> Result<Vec<u8>, CoreError> {
-    let deadline = Instant::now() + RECEIVE_DEADLINE;
+    let deadline = Instant::now() + link.handshake_deadline();
     loop {
         match link.receive().map_err(map_transport)? {
             Some(frame) => return Ok(frame),

@@ -46,6 +46,12 @@ pub trait Transport: Send + Sync {
     /// Returns `Ok(None)` if nothing arrived within the poll interval. Returns
     /// an error, never a partial frame, when the link is gone.
     fn receive(&self) -> Result<Option<Vec<u8>>, TransportError>;
+
+    /// How long the handshake helpers wait for each frame on this link before giving up.
+    /// A carrier with more latency than a LAN socket (Tor) overrides this.
+    fn handshake_deadline(&self) -> Duration {
+        Duration::from_secs(10)
+    }
 }
 
 /// One TCP connection. Each frame is a 4-byte big-endian length, then the body.

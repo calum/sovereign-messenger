@@ -89,6 +89,25 @@ pub struct LockReport {
     pub stored_locked: u64,
 }
 
+/// Where Tor is in coming up. `NotBuilt` means this build has no Tor at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum TorState {
+    NotBuilt,
+    Stopped,
+    Starting,
+    Bootstrapping,
+    Publishing,
+    Ready,
+    Failed,
+}
+
+/// Tor progress for the status line. `percent` (0 to 100) is meaningful while bootstrapping.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct TorStatus {
+    pub state: TorState,
+    pub percent: u8,
+}
+
 #[derive(Debug, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 #[uniffi(flat_error)]
 pub enum FacadeError {
@@ -116,6 +135,9 @@ pub enum FacadeError {
     NoLink,
     #[error("network error")]
     Network,
+    /// This build has no Tor, or Tor has not been started on this messenger.
+    #[error("tor is not running")]
+    TorUnavailable,
     #[error("internal state unavailable")]
     Internal,
 }
@@ -163,6 +185,9 @@ struct State {
     /// Key that seals the identity vault. `None` for a `new()` messenger, which
     /// has no vault. Zeroized on drop.
     data_key: Option<Key32>,
+    /// The Tor client and onion service, once started. Dropping it stops both.
+    #[cfg(feature = "tor")]
+    tor: Option<Arc<crate::tor::TorNode>>,
 }
 
 /// Collects the scanned QR parts of one pairing. Holds only public bytes.
@@ -485,6 +510,126 @@ impl Messenger {
         self.respond_on_link(link, None)
     }
 
+    /// Progress of Tor and the onion service, for the status line. Cheap; safe to poll.
+    pub fn tor_status(&self) -> Result<TorStatus, FacadeError> {
+        #[cfg(not(feature = "tor"))]
+        {
+            Ok(TorStatus {
+                state: TorState::NotBuilt,
+                percent: 0,
+            })
+        }
+        #[cfg(feature = "tor")]
+        {
+            use crate::tor::Phase;
+            let Some(node) = self.lock()?.tor.clone() else {
+                return Ok(TorStatus {
+                    state: TorState::Stopped,
+                    percent: 0,
+                });
+            };
+            let status = node.status();
+            let state = match status.phase {
+                Phase::Starting => TorState::Starting,
+                Phase::Bootstrapping => TorState::Bootstrapping,
+                Phase::Publishing => TorState::Publishing,
+                Phase::Ready => TorState::Ready,
+                Phase::Failed => TorState::Failed,
+            };
+            Ok(TorStatus {
+                state,
+                percent: status.percent,
+            })
+        }
+    }
+
+    /// Starts Tor and this identity's onion service in the background and returns at once.
+    /// `state_dir` must be app-private storage; it holds only Tor's public directory data
+    /// and guard state, never the onion key. Calling it again while a node is running is a
+    /// no-op; after a failure it starts a fresh node. `TorUnavailable` in a build without Tor.
+    pub fn tor_start(&self, state_dir: String) -> Result<(), FacadeError> {
+        #[cfg(not(feature = "tor"))]
+        {
+            let _ = state_dir;
+            Err(FacadeError::TorUnavailable)
+        }
+        #[cfg(feature = "tor")]
+        {
+            use crate::tor::{Phase, TorNode};
+            let mut st = self.lock()?;
+            if let Some(node) = &st.tor {
+                if node.status().phase != Phase::Failed {
+                    return Ok(());
+                }
+            }
+            let mut seed = [0u8; 32];
+            seed.copy_from_slice(st.identity.onion_seed());
+            let started = TorNode::start(std::path::Path::new(&state_dir), &seed, st.public.onion);
+            seed.zeroize();
+            st.tor = Some(started.map_err(|_| FacadeError::Network)?);
+            Ok(())
+        }
+    }
+
+    /// Stops Tor and the onion service. Open Tor links close with it. Harmless if not started.
+    pub fn tor_stop(&self) -> Result<(), FacadeError> {
+        #[cfg(feature = "tor")]
+        {
+            let node = self.lock()?.tor.take();
+            drop(node); // dropped outside the lock: stopping the runtime can take a moment
+        }
+        Ok(())
+    }
+
+    /// Dials the onion address pinned for `peer_id` and runs the handshake with it. Blocks,
+    /// possibly for minutes; the app runs it off the UI thread. `NotPinned` for an unpinned
+    /// contact, `TorUnavailable` if Tor was not started, `Network` if the peer cannot be reached.
+    pub fn connect_peer_tor(&self, peer_id: String) -> Result<(), FacadeError> {
+        let address = {
+            let st = self.lock()?;
+            let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?;
+            onion::address(&pinned.onion)
+        };
+        #[cfg(not(feature = "tor"))]
+        {
+            let _ = address;
+            Err(FacadeError::TorUnavailable)
+        }
+        #[cfg(feature = "tor")]
+        {
+            let node = self
+                .lock()?
+                .tor
+                .clone()
+                .ok_or(FacadeError::TorUnavailable)?;
+            let link = node.connect(&address).map_err(|_| FacadeError::Network)?;
+            self.initiate_on_link(peer_id, Arc::new(link))
+        }
+    }
+
+    /// Waits up to `timeout_secs` for a pinned contact to call this identity's onion service,
+    /// runs the handshake, and returns the contact's label. A caller whose key is not pinned
+    /// is refused (`NotPinned`). Blocks; the app runs it off the UI thread.
+    pub fn accept_peer_tor(&self, timeout_secs: u32) -> Result<String, FacadeError> {
+        #[cfg(not(feature = "tor"))]
+        {
+            let _ = timeout_secs;
+            Err(FacadeError::TorUnavailable)
+        }
+        #[cfg(feature = "tor")]
+        {
+            let node = self
+                .lock()?
+                .tor
+                .clone()
+                .ok_or(FacadeError::TorUnavailable)?;
+            let link = node
+                .accept(Duration::from_secs(u64::from(timeout_secs)))
+                .map_err(|_| FacadeError::Network)?;
+            self.respond_on_link(Arc::new(link), None)
+        }
+    }
+
     /// Binds `bind_addr` and waits up to `timeout_secs` for one peer to connect.
     /// Blocks the calling thread; the app runs it off the UI thread.
     pub fn listen_for_peer(
@@ -705,6 +850,8 @@ impl Messenger {
                 listening: None,
                 pending_challenge: None,
                 data_key,
+                #[cfg(feature = "tor")]
+                tor: None,
             }),
         })
     }
