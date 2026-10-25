@@ -1,7 +1,12 @@
 //! UniFFI facade: the only surface Kotlin can call. Keys, chain state and
 //! plaintext history stay in Rust. Kotlin gets public identity bytes, handshake
 //! bytes, sealed wire bytes, and plaintext strings for display. It never gets a
-//! private key, a chain key or a message key. Errors carry no content.
+//! private identity key, a chain key or a message key. Errors carry no content.
+//!
+//! One exception, by owner decision (2026-10-25): `data_key` hands Kotlin the
+//! 32-byte vault key once, so the Android Keystore can wrap it, and `restore`
+//! takes it back after a restart. While Kotlin holds it, the plaintext key sits on
+//! the Java heap. The vault blob and the wrapped key are the only things Kotlin stores.
 //!
 //! Lock order: a session's send or receive lock may be held while taking the
 //! state lock, never the reverse. A receive blocked on the socket holds only its
@@ -23,6 +28,7 @@ use crate::secret::{Key32, SecretBytes};
 use crate::store::Store;
 use crate::transport::{TcpTransport, Transport};
 use crate::update;
+use crate::vault;
 use crate::wire::{self, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
 
 /// Public identity, safe to show in a QR code. Holds no secret material.
@@ -140,7 +146,8 @@ struct State {
     identity: Identity,
     public: IdentityPublic,
     sessions: HashMap<String, Arc<Session>>,
-    /// Trust-on-first-use pins, keyed by the caller's peer label. RAM only.
+    /// Trust-on-first-use pins, keyed by the caller's peer label. Sealed into the
+    /// vault by `export_vault`, never written in the clear.
     /// Survives `forget` and `wipe_all` so a later QR cannot replace a key.
     pins: HashMap<String, IdentityPublic>,
     store: Store,
@@ -150,6 +157,9 @@ struct State {
     /// The challenge last issued by `responder_challenge`. Spent by the next
     /// `accept_session`, whatever its outcome, so it cannot authenticate a second handshake.
     pending_challenge: Option<[u8; CHALLENGE_LEN]>,
+    /// Key that seals the identity vault. `None` for a `new()` messenger, which
+    /// has no vault. Zeroized on drop.
+    data_key: Option<Key32>,
 }
 
 /// Collects the scanned QR parts of one pairing. Holds only public bytes.
@@ -200,17 +210,50 @@ impl Messenger {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
         let (identity, public) = Identity::generate();
-        Arc::new(Self {
-            state: Mutex::new(State {
-                identity,
-                public,
-                sessions: HashMap::new(),
-                pins: HashMap::new(),
-                store: Store::new(),
-                listening: None,
-                pending_challenge: None,
-            }),
-        })
+        Self::from_parts(identity, public, HashMap::new(), None)
+    }
+
+    /// A fresh identity with a fresh data key, for a first launch. The caller takes
+    /// `data_key` once to have it wrapped, then stores `export_vault` after every pin change.
+    #[uniffi::constructor]
+    pub fn create_persistent() -> Arc<Self> {
+        let (identity, public) = Identity::generate();
+        Self::from_parts(
+            identity,
+            public,
+            HashMap::new(),
+            Some(vault::new_data_key()),
+        )
+    }
+
+    /// Rebuilds the identity and pins from a stored vault. `AuthFailed` for a wrong
+    /// key or any changed byte, `Malformed` for a short blob or a key that is not
+    /// 32 bytes. Nothing is partly restored on a refusal. Sessions and messages
+    /// are not in the vault, so the restored messenger starts with none.
+    #[uniffi::constructor]
+    pub fn restore(data_key: Vec<u8>, vault_blob: Vec<u8>) -> Result<Arc<Self>, FacadeError> {
+        let key = Key32(to_array32(&data_key)?);
+        let plain = vault::open(&key, &vault_blob)?;
+        let (identity, public, pins) = vault::decode_contents(plain.expose())?;
+        Ok(Self::from_parts(identity, public, pins, Some(key)))
+    }
+
+    /// The vault key, handed out once so Kotlin can wrap it with the Keystore.
+    /// `Internal` for a messenger made with `new()`, which has no vault.
+    pub fn data_key(&self) -> Result<Vec<u8>, FacadeError> {
+        let st = self.lock()?;
+        let key = st.data_key.as_ref().ok_or(FacadeError::Internal)?;
+        Ok(key.0.to_vec())
+    }
+
+    /// The identity and pins sealed under the data key, fresh nonce each call.
+    /// Call it after `scan_pairing`, `unpin` or any handshake that pins a new peer,
+    /// and write the result to app-private storage excluded from backup.
+    pub fn export_vault(&self) -> Result<Vec<u8>, FacadeError> {
+        let st = self.lock()?;
+        let key = st.data_key.as_ref().ok_or(FacadeError::Internal)?;
+        let contents = vault::encode_contents(&st.identity, &st.pins)?;
+        Ok(vault::seal(key, &contents)?)
     }
 
     pub fn own_identity(&self) -> Result<PublicIdentity, FacadeError> {
@@ -626,6 +669,26 @@ impl Messenger {
 }
 
 impl Messenger {
+    fn from_parts(
+        identity: Identity,
+        public: IdentityPublic,
+        pins: HashMap<String, IdentityPublic>,
+        data_key: Option<Key32>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(State {
+                identity,
+                public,
+                sessions: HashMap::new(),
+                pins,
+                store: Store::new(),
+                listening: None,
+                pending_challenge: None,
+                data_key,
+            }),
+        })
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, State>, FacadeError> {
         // A poisoned lock means a panic happened mid-update. Refuse to continue
         // rather than read half-updated ratchet state.

@@ -22,7 +22,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
 use crate::error::CoreError;
-use crate::secret::Key32;
+use crate::secret::{Key32, SecretBytes};
 
 type DecapKey = <MlKem768 as Kem>::DecapsulationKey;
 type EncapKey = <MlKem768 as Kem>::EncapsulationKey;
@@ -50,19 +50,39 @@ pub struct IdentityPublic {
     pub mlkem_ek: Vec<u8>,
 }
 
-/// Long-term identity secret. Lives only in RAM.
+/// Length of the ML-KEM-768 key seed, in bytes. The decapsulation key is derived from it.
+pub const MLKEM_SEED_LEN: usize = 64;
+
+/// Long-term identity secret. In RAM while the app runs; it reaches flash only
+/// sealed under the data key (`vault`), and never in plaintext.
 pub struct Identity {
     x25519: StaticSecret,
     mlkem_dk: DecapKey,
+    /// Kept so the identity can be sealed into the vault and rebuilt after a restart.
+    /// `SecretBytes` zeroizes it on drop.
+    mlkem_seed: SecretBytes,
 }
 
 impl Identity {
     pub fn generate() -> (Self, IdentityPublic) {
-        let x25519 = StaticSecret::random_from_rng(OsRng);
-        let mut seed = [0u8; 64];
+        let mut x25519 = [0u8; 32];
+        random_fill(&mut x25519);
+        let mut seed = [0u8; MLKEM_SEED_LEN];
         random_fill(&mut seed);
-        let (dk, ek) = MlKem768::from_seed(&seed.into());
+        let out = Self::from_secrets(&x25519, &seed);
+        x25519.zeroize();
         seed.zeroize();
+        out
+    }
+
+    /// Rebuilds an identity from its two secrets. The public half is recomputed,
+    /// so a restored identity gives the same QR payload as the original.
+    pub fn from_secrets(
+        x25519: &[u8; 32],
+        mlkem_seed: &[u8; MLKEM_SEED_LEN],
+    ) -> (Self, IdentityPublic) {
+        let x25519 = StaticSecret::from(*x25519);
+        let (dk, ek) = MlKem768::from_seed(&(*mlkem_seed).into());
         let public = IdentityPublic {
             x25519: PublicKey::from(&x25519).to_bytes(),
             mlkem_ek: ek.to_bytes().to_vec(),
@@ -71,9 +91,20 @@ impl Identity {
             Self {
                 x25519,
                 mlkem_dk: dk,
+                mlkem_seed: SecretBytes::new(mlkem_seed),
             },
             public,
         )
+    }
+
+    /// The X25519 secret, for sealing into the vault only.
+    pub(crate) fn x25519_secret(&self) -> Key32 {
+        Key32(self.x25519.to_bytes())
+    }
+
+    /// The ML-KEM seed, for sealing into the vault only.
+    pub(crate) fn mlkem_seed(&self) -> &[u8] {
+        self.mlkem_seed.expose()
     }
 }
 
@@ -334,6 +365,7 @@ mod tests {
         let half_wrong = Identity {
             x25519: StaticSecret::random_from_rng(OsRng),
             mlkem_dk: real.mlkem_dk,
+            mlkem_seed: real.mlkem_seed,
         };
         assert_eq!(
             respond(&half_wrong, &alice_pub.x25519, &init, &c).err(),
