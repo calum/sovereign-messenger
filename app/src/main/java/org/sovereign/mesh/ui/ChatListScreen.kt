@@ -1,6 +1,12 @@
 package org.sovereign.mesh.ui
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TopAppBar
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -20,78 +25,73 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.sovereign.mesh.SovereignApp
-import org.sovereign.mesh.core.torStatusText
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: () -> Unit) {
     val peers = chatListPeers(SovereignApp.core.pinnedPeers(), SovereignApp.core.peers())
     var confirmDelete by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+    Scaffold(
+        topBar = { TopAppBar(title = { Text(chatListTitle) }) },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(onClick = onPair, text = { Text("Pair a contact") }, icon = {})
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(chatListTitle, style = MaterialTheme.typography.titleLarge)
-        }
-        P2pMeshIndicator(peer = null, modifier = Modifier.padding(top = 4.dp))
-        SovereignApp.tor.snapshot.let {
-            Text(
-                torStatusText(it.state, it.percent),
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-        }
-        Button(onClick = onPair, modifier = Modifier.padding(top = 8.dp)) {
-            Text("Pair a contact")
-        }
-        OutlinedButton(onClick = onUpdate, modifier = Modifier.padding(top = 8.dp)) {
-            Text("Updates")
-        }
-        identityNotice(SovereignApp.identityUnreadable, SovereignApp.core.saveFailed)?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 12.dp))
-        }
-        OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.padding(top = 8.dp)) {
-            Text("Delete my identity")
-        }
-
-        if (confirmDelete) {
-            DeleteIdentityDialog(
-                onConfirm = {
-                    confirmDelete = false
-                    // Stopping Tor and deleting its folder can take a moment: not on the UI thread.
-                    scope.launch(Dispatchers.IO) { SovereignApp.deleteIdentity() }
-                },
-                onDismiss = { confirmDelete = false },
-            )
-        }
-
-        if (peers.isEmpty()) {
-            Text(
-                "No contacts yet. Meet a friend in person and scan their QR code to pair.",
-                modifier = Modifier.padding(top = 24.dp),
-            )
-        } else {
-            LazyColumn {
-                items(peers) { peer ->
+            item { TorStatusCard() }
+            item { P2pMeshIndicator(peer = null) }
+            identityNotice(SovereignApp.identityUnreadable, SovereignApp.core.saveFailed)?.let {
+                item { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+            if (peers.isEmpty()) {
+                item {
                     Text(
-                        peer,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onOpenChat(peer) }
-                            .padding(vertical = 16.dp),
+                        "No contacts yet. Meet a friend in person and scan their QR code to pair.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(top = 12.dp),
                     )
+                }
+            } else {
+                item { Text("Contacts", style = MaterialTheme.typography.titleMedium) }
+                items(peers) { peer ->
+                    ElevatedCard(onClick = { onOpenChat(peer) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            peer,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(16.dp),
+                        )
+                    }
+                }
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
+                    OutlinedButton(onClick = onUpdate) { Text("Updates") }
+                    OutlinedButton(onClick = { confirmDelete = true }) { Text("Delete my identity") }
                 }
             }
         }
+    }
+
+    if (confirmDelete) {
+        DeleteIdentityDialog(
+            onConfirm = {
+                confirmDelete = false
+                // Stopping Tor and deleting its folder can take a moment: not on the UI thread.
+                scope.launch(Dispatchers.IO) { SovereignApp.deleteIdentity() }
+            },
+            onDismiss = { confirmDelete = false },
+        )
     }
 }
 

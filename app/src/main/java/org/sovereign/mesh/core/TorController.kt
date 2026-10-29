@@ -1,6 +1,7 @@
 package org.sovereign.mesh.core
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.io.File
@@ -27,7 +28,21 @@ class TorController(private val core: CoreBridge, private val stateDir: File) {
     var snapshot by mutableStateOf(TorSnapshot(TorState.STOPPED, 0))
         private set
 
+    /** Recent progress lines, newest last. Fixed sentences with a time; no keys, addresses or messages. */
+    val log = mutableStateListOf<TorLogLine>()
+
     private var job: Job? = null
+
+    /** Adds a line to the progress log, dropping the oldest beyond [LOG_LIMIT]. */
+    fun note(text: String) {
+        log.add(TorLogLine(System.currentTimeMillis(), text))
+        while (log.size > LOG_LIMIT) log.removeAt(0)
+    }
+
+    private fun update(next: TorSnapshot) {
+        torLogEntry(snapshot, next)?.let(::note)
+        snapshot = next
+    }
 
     fun start(scope: CoroutineScope) {
         job?.cancel()
@@ -37,7 +52,7 @@ class TorController(private val core: CoreBridge, private val stateDir: File) {
             while (isActive) {
                 try {
                     val status = core.torStatus()
-                    snapshot = TorSnapshot(status.state, status.percent.toInt())
+                    update(TorSnapshot(status.state, status.percent.toInt()))
                     when (status.state) {
                         TorState.NOT_BUILT -> return@launch
                         TorState.STOPPED -> core.startTor(stateDir.absolutePath)
@@ -58,7 +73,7 @@ class TorController(private val core: CoreBridge, private val stateDir: File) {
                         else -> failedSince = null
                     }
                 } catch (e: FacadeException) {
-                    snapshot = TorSnapshot(TorState.FAILED, 0)
+                    update(TorSnapshot(TorState.FAILED, 0))
                 }
                 delay(POLL_MS)
             }
@@ -75,6 +90,7 @@ class TorController(private val core: CoreBridge, private val stateDir: File) {
             // Nothing to stop.
         }
         snapshot = TorSnapshot(TorState.STOPPED, 0)
+        log.clear()
     }
 
     /** Takes calls from contacts. Each core call waits up to [ACCEPT_SECONDS] and cannot be cancelled. */
@@ -92,7 +108,8 @@ class TorController(private val core: CoreBridge, private val stateDir: File) {
     }
 
     private companion object {
-        const val POLL_MS = 2_000L
+        const val POLL_MS = 1_000L
+        const val LOG_LIMIT = 40
         const val ACCEPT_WORKERS = 4
         const val ACCEPT_SECONDS = 30
         const val ACCEPT_RETRY_MS = 500L

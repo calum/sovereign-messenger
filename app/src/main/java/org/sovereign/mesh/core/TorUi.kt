@@ -50,3 +50,62 @@ fun shouldDial(
     val wait = (DIAL_BACKOFF_FIRST_MS shl doublings).coerceAtMost(DIAL_BACKOFF_MAX_MS)
     return failures == 0 || last >= wait
 }
+
+/**
+ * How far along Tor start-up is. [fraction] is null when the core reports a stage with no
+ * measurable progress (the bar then runs indeterminate); [active] is false once Tor is up
+ * or has stopped, when no bar is shown.
+ */
+data class TorProgress(val fraction: Float?, val active: Boolean)
+
+fun torProgress(state: TorState, percent: Int): TorProgress =
+    when (state) {
+        TorState.STARTING -> TorProgress(null, true)
+        TorState.BOOTSTRAPPING -> TorProgress(percent.coerceIn(0, 100) / 100f, true)
+        TorState.PUBLISHING -> TorProgress(null, true)
+        TorState.NOT_BUILT, TorState.STOPPED, TorState.READY, TorState.FAILED -> TorProgress(1f, false)
+    }
+
+/** One line of the progress log. Holds only a time and a fixed sentence, never an address or key. */
+data class TorLogLine(val atMillis: Long, val text: String)
+
+/** Bootstrap progress is logged at every step of this many percent, not on every poll. */
+private const val LOG_PERCENT_STEP = 10
+
+/**
+ * The log line for a status change, or null when nothing worth showing changed. A new state
+ * always logs; within bootstrapping only a new 10% step does. Pure, so it is tested on the JVM.
+ */
+fun torLogEntry(previous: TorSnapshot?, current: TorSnapshot): String? {
+    if (previous == null || previous.state != current.state) {
+        return when (current.state) {
+            TorState.NOT_BUILT -> "Tor is not included in this build"
+            TorState.STOPPED -> "Tor stopped"
+            TorState.STARTING -> "Starting Tor"
+            TorState.BOOTSTRAPPING -> "Connecting to the Tor network (${current.percent.coerceIn(0, 100)}%)"
+            TorState.PUBLISHING -> "Publishing your onion address. The first time this can take several minutes"
+            TorState.READY -> "Tor is ready. Contacts can reach you"
+            TorState.FAILED -> "Tor failed to start. Will retry"
+        }
+    }
+    if (current.state == TorState.BOOTSTRAPPING &&
+        current.percent / LOG_PERCENT_STEP != (previous?.percent ?: 0) / LOG_PERCENT_STEP
+    ) {
+        return "Connecting to the Tor network (${current.percent.coerceIn(0, 100)}%)"
+    }
+    return null
+}
+
+/**
+ * What the chat screen says about the contact's side of the link. The core only learns that
+ * the contact is online when a Tor connection to or from them succeeds, so "not connected"
+ * means not yet reached, not that they are offline.
+ */
+fun contactLinkText(role: TorRole?, torReady: Boolean, linkAlive: Boolean, dialing: Boolean): String =
+    when {
+        linkAlive -> "Contact is connected over Tor"
+        !torReady -> "Waiting for your Tor to be ready"
+        dialing -> "Reaching your contact over Tor..."
+        role == TorRole.DIAL -> "Contact not reached yet. Trying again shortly"
+        else -> "Waiting for your contact to connect (they need Tor ready too)"
+    }

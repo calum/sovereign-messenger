@@ -1,5 +1,19 @@
 package org.sovereign.mesh.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TopAppBar
+import org.sovereign.mesh.core.contactLinkText
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -59,6 +73,7 @@ private const val RECEIVE_RETRY_MS = 2_000L
 /** How often the dial rule is checked. The rule itself decides whether to dial. */
 private const val DIAL_CHECK_MS = 1_000L
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(peer: String, onBack: () -> Unit) {
     val core = SovereignApp.core
@@ -120,6 +135,7 @@ fun ChatScreen(peer: String, onBack: () -> Unit) {
                 busy = true
                 lastAttempt = now
                 status = "Connecting to $peer over Tor. This can take a few minutes."
+                SovereignApp.tor.note("Reaching your contact over Tor")
                 val result = withContext(Dispatchers.IO) { runCatching { core.connectTor(peer) } }
                 busy = false
                 val error = result.exceptionOrNull()
@@ -128,9 +144,11 @@ fun ChatScreen(peer: String, onBack: () -> Unit) {
                     lastAttempt = null
                     linkAlive = true
                     status = "Connected."
+                    SovereignApp.tor.note("Contact connected")
                     connectionEpoch += 1
                 } else {
                     dialFailures += 1
+                    SovereignApp.tor.note("Could not reach your contact (attempt $dialFailures)")
                     status = transportStatusText(error) + " Trying again shortly."
                 }
             }
@@ -138,118 +156,149 @@ fun ChatScreen(peer: String, onBack: () -> Unit) {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+    Scaffold(
+        contentWindowInsets = WindowInsets.systemBars,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(peer)
+                        Text(
+                            "RAM only · ${formatRetention(remaining)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .consumeWindowInsets(padding)
+                .imePadding()
+                .padding(horizontal = 12.dp),
         ) {
-            Button(onClick = onBack) { Text("Back") }
-            Text(
-                "RAM only · ${formatRetention(remaining)}",
-                style = MaterialTheme.typography.labelMedium,
+            TorStatusCard(modifier = Modifier.padding(top = 4.dp))
+            ContactLinkRow(
+                text = contactLinkText(role, torIsReady(tor.state), linkAlive, busy),
+                connected = linkAlive,
+                modifier = Modifier.padding(top = 8.dp),
             )
-        }
-        P2pMeshIndicator(peer = peer, modifier = Modifier.padding(top = 4.dp))
-        Text(
-            torStatusText(tor.state, tor.percent),
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(top = 4.dp),
-        )
-        if (role == TorRole.WAIT && !linkAlive) {
-            Text(
-                "Waiting for $peer to connect over Tor.",
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-        }
+            P2pMeshIndicator(peer = peer, modifier = Modifier.padding(top = 4.dp))
 
-        status?.let { Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 4.dp)) }
+            status?.let { Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 4.dp)) }
 
-        TextButton(onClick = { showWifiTest = !showWifiTest }, modifier = Modifier.padding(top = 2.dp)) {
-            Text(if (showWifiTest) "Hide same-Wi-Fi test" else "Same-Wi-Fi test connection")
-        }
-        if (showWifiTest) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-                OutlinedTextField(
-                    value = address,
-                    onValueChange = { address = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Contact address host:port") },
-                    singleLine = true,
-                )
-                Button(
-                    enabled = !busy && address.isNotBlank(),
+            TextButton(onClick = { showWifiTest = !showWifiTest }) {
+                Text(if (showWifiTest) "Hide same-Wi-Fi test" else "Same-Wi-Fi test connection (not private)")
+            }
+            if (showWifiTest) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = address,
+                        onValueChange = { address = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Contact address host:port") },
+                        singleLine = true,
+                    )
+                    Button(
+                        enabled = !busy && address.isNotBlank(),
+                        onClick = {
+                            busy = true
+                            status = "Connecting..."
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching { core.connect(peer, address.trim()) }
+                                }
+                                busy = false
+                                status = result.exceptionOrNull()?.let(::transportStatusText) ?: "Connected."
+                                if (result.isSuccess) connectionEpoch += 1
+                            }
+                        },
+                        modifier = Modifier.padding(start = 8.dp),
+                    ) { Text("Connect") }
+                }
+                OutlinedButton(
+                    enabled = !busy,
                     onClick = {
                         busy = true
-                        status = "Connecting..."
+                        status = "Waiting for the contact on port $LISTEN_PORT..."
                         scope.launch {
                             val result = withContext(Dispatchers.IO) {
-                                runCatching { core.connect(peer, address.trim()) }
+                                runCatching { core.listen(peer, "0.0.0.0:$LISTEN_PORT", LISTEN_SECONDS) }
                             }
                             busy = false
                             status = result.exceptionOrNull()?.let(::transportStatusText) ?: "Connected."
                             if (result.isSuccess) connectionEpoch += 1
                         }
                     },
+                    modifier = Modifier.padding(top = 4.dp),
+                ) { Text("Wait for contact") }
+            }
+
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(messages.value) { text ->
+                    Surface(
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                    ) {
+                        Text(text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                    }
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Message") },
+                )
+                Button(
+                    onClick = {
+                        val text = draft
+                        if (text.isNotBlank()) {
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching { core.send(peer, text) }
+                                }
+                                val error = result.exceptionOrNull()
+                                if (error == null) {
+                                    draft = ""
+                                    status = null
+                                } else {
+                                    // Keep the draft so the user can retry after reconnecting.
+                                    status = transportStatusText(error)
+                                }
+                                messages.value = core.history(peer)
+                            }
+                        }
+                    },
                     modifier = Modifier.padding(start = 8.dp),
-                ) { Text("Connect") }
-            }
-
-            Button(
-                enabled = !busy,
-                onClick = {
-                    busy = true
-                    status = "Waiting for the contact on port $LISTEN_PORT..."
-                    scope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            runCatching { core.listen(peer, "0.0.0.0:$LISTEN_PORT", LISTEN_SECONDS) }
-                        }
-                        busy = false
-                        status = result.exceptionOrNull()?.let(::transportStatusText) ?: "Connected."
-                        if (result.isSuccess) connectionEpoch += 1
-                    }
-                },
-                modifier = Modifier.padding(top = 4.dp),
-            ) { Text("Wait for contact") }
-
-        }
-
-        LazyColumn(modifier = Modifier.weight(1f).padding(vertical = 8.dp)) {
-            items(messages.value) { text ->
-                Text(text, modifier = Modifier.padding(vertical = 4.dp))
+                ) { Text("Send") }
             }
         }
+    }
+}
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message") },
-            )
-            Button(
-                onClick = {
-                    val text = draft
-                    if (text.isNotBlank()) {
-                        scope.launch {
-                            val result = withContext(Dispatchers.IO) {
-                                runCatching { core.send(peer, text) }
-                            }
-                            val error = result.exceptionOrNull()
-                            if (error == null) {
-                                draft = ""
-                                status = null
-                            } else {
-                                // Keep the draft so the user can retry after reconnecting.
-                                status = transportStatusText(error)
-                            }
-                            messages.value = core.history(peer)
-                        }
-                    }
-                },
-                modifier = Modifier.padding(start = 8.dp),
-            ) { Text("Send") }
-        }
+/** One line saying whether the contact's side of the link is up. */
+@Composable
+private fun ContactLinkRow(text: String, connected: Boolean, modifier: Modifier = Modifier) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .background(
+                    color = if (connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    shape = CircleShape,
+                ),
+        )
+        Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
     }
 }
