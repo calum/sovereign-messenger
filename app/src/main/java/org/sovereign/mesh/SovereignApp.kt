@@ -28,6 +28,12 @@ class SovereignApp : Application() {
         var identityUnreadable by mutableStateOf(false)
             private set
 
+        /**
+         * Report of a native crash or start-up failure that ended the previous run, or null.
+         * Held in memory only; the user dismisses it from the first screen.
+         */
+        var earlierExitReport by mutableStateOf<String?>(null)
+
         private lateinit var vault: IdentityVault
 
         /** Keeps Tor and the onion service running for the current identity. */
@@ -70,6 +76,11 @@ class SovereignApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // First, so that any failure below ends in a readable report instead of a silent close.
+        CrashReporting.install(this)
+        // The report screen runs in its own process and must not open the vault or start Tor.
+        if (CrashReporting.isCrashProcess()) return
+        earlierExitReport = CrashReporting.earlierExit(this)
         // App-private storage; excluded from backup by data_extraction_rules.xml.
         // Tor's public directory cache and guard state live in app-private files; no key or message does.
         start(IdentityVault(filesDir, AndroidKeystoreWrapper()), File(filesDir, "tor"))

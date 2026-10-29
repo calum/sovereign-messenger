@@ -36,7 +36,14 @@ class MainActivity : ComponentActivity() {
                     var showPairing by remember { mutableStateOf(false) }
                     var showUpdate by remember { mutableStateOf(false) }
 
+                    val earlierExit = SovereignApp.earlierExitReport
                     when {
+                        earlierExit != null -> CrashReportScreen(
+                            report = earlierExit,
+                            headline = "The app stopped last time",
+                            doneLabel = "Continue",
+                            onDone = { SovereignApp.earlierExitReport = null },
+                        )
                         showTour -> TourScreen(onFinished = { showTour = false })
                         showPairing -> PairingScreen(onBack = { showPairing = false })
                         showUpdate -> UpdateScreen(onBack = { showUpdate = false })
