@@ -39,7 +39,7 @@ mise run check          # lint and run every test
 mise run android:debug  # build the debug APK
 ```
 
-CI (`.github/workflows/ci.yml`) is set up to run the Rust checks only (fmt, clippy, tests, with and without the Tor feature); it has not been seen running on GitHub yet. It does not build the Android app or run the Kotlin tests.
+CI (`.github/workflows/ci.yml`) is set up to run the Rust checks only (fmt, clippy, tests, with and without the Tor feature); it has run green on the pull request that added it (2026-10-29). It does not build the Android app or run the Kotlin tests.
 
 Setup for the Android SDK, NDK and Windows is in [docs/setup.md](docs/setup.md). The checks that need a person and a phone are in [docs/owner-test-list.md](docs/owner-test-list.md).
 

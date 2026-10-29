@@ -16,7 +16,7 @@ Status 2026-10-29: T1 to T9 and T12 are merged; T10 was dropped; T11 is the docs
 - [x] T9 liveness ping
 - [ ] T10 dropped by the owner (not done on purpose)
 - [x] T11 docs match the code (this change)
-- [x] T12 Rust CI (not yet seen running on GitHub)
+- [x] T12 Rust CI (green on PR #8, Rust jobs only)
 
 ## Owner decisions (2026-10-29)
 
@@ -160,4 +160,4 @@ Not done, or only partly done:
 - **Fallback gap after identity deletion (found by the T6 reviewer):** if starting the new identity fails, `SovereignApp` keeps pointing at the released core until the next launch. The vault is already gone, so that launch starts clean. No fallback core is created.
 - **Wait-role limits:** the dead-session close works because `Transport::close` ends the stream so the dialling side sees an error. The Tor `close` compiles and its suite passes, but no test closes a real onion stream. A handshake-chain message overtaken by the initiator's first DH step is still refused.
 - **Ping compatibility:** a build without the ping is declared dead by a new build after 75 s idle; builds from before handshake v2 cannot connect at all.
-- **Not verified:** anything on a real phone or between two phones, CI on GitHub (the workflow has not been seen running), and the Kotlin changes' build on this machine. No independent cryptography review of the ratchet, handshake v2 or the other changes.
+- **Not verified:** anything on a real phone or between two phones, the Kotlin tests and the Android build in CI (CI runs the Rust checks only; the Kotlin tests for T5 and T6 were run by the implementers under Gradle, not in CI), and the app on a device. No independent cryptography review of the ratchet, handshake v2 or the other changes.
