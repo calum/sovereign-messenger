@@ -17,7 +17,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -40,9 +39,6 @@ import org.sovereign.mesh.core.deliveryMark
 import org.sovereign.mesh.core.listTime
 import org.sovereign.mesh.core.presenceText
 import org.sovereign.mesh.core.previewText
-import org.sovereign.mesh.core.torIsReady
-import org.sovereign.mesh.core.torStatusText
-import uniffi.rust_core.TorState
 
 @Composable
 fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onSettings: () -> Unit) {
@@ -66,7 +62,7 @@ fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onSettings:
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            TorBanner()
+            TorStatusCard(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             identityNotice(SovereignApp.identityUnreadable, SovereignApp.core.saveFailed)?.let {
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -92,29 +88,6 @@ fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onSettings:
                     item { Box(modifier = Modifier.size(88.dp)) }
                 }
             }
-        }
-    }
-}
-
-/** Shown only while Tor is not up, so a quiet chat list is not mistaken for a broken one. */
-@Composable
-private fun TorBanner() {
-    val tor = SovereignApp.tor.snapshot
-    if (torIsReady(tor.state) || tor.state == TorState.NOT_BUILT) return
-    Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (tor.state != TorState.FAILED && tor.state != TorState.STOPPED) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-            }
-            Text(
-                torStatusText(tor.state, tor.percent),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
         }
     }
 }
@@ -205,6 +178,14 @@ private fun UnreadBadge(count: Int) {
         )
     }
 }
+
+/**
+ * Every pinned contact plus any peer with a live session. A pinned contact has no session
+ * until the first connection, so listing only sessions left a freshly paired contact with
+ * no way to open a chat.
+ */
+internal fun chatListPeers(pinned: List<String>, sessions: List<String>): List<String> =
+    (pinned + sessions).distinct().sorted()
 
 /** The chat list title. It must not say "secured" until the app can back that claim (CLAUDE.md rule 7). */
 internal const val chatListTitle = "P2P Mesh"

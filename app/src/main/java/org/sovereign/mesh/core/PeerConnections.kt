@@ -23,6 +23,7 @@ import uniffi.rust_core.FacadeException
 class PeerConnections(
     private val core: CoreBridge,
     private val torState: () -> TorSnapshot,
+    private val note: (String) -> Unit = {},
 ) {
     /** Bumped whenever something arrives or a link changes, so screens re-read the core at once. */
     var revision by mutableIntStateOf(0)
@@ -109,12 +110,15 @@ class PeerConnections(
             if (shouldDial(role, ready, false, false, lastAttempt?.let { now - it }, failures)) {
                 dialling[peer] = true
                 lastAttempt = now
+                note("Reaching a contact over Tor")
                 val result = runCatching { core.connectTor(peer) }
                 dialling.remove(peer)
                 if (result.isSuccess) {
                     problems.remove(peer)
+                    note("Contact connected")
                 } else {
                     failures += 1
+                    note("Could not reach a contact (attempt $failures)")
                 }
                 refresh()
             }

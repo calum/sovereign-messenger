@@ -6,7 +6,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import org.sovereign.mesh.core.Route
@@ -38,13 +40,17 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val earlierExit = SovereignApp.earlierExitReport
                     when {
-                        earlierExit != null -> CrashReportScreen(
-                            report = earlierExit,
-                            headline = "The app stopped last time",
-                            doneLabel = "Continue",
-                            onDone = { SovereignApp.earlierExitReport = null },
-                        )
-                        !SovereignApp.tourSeen -> TourScreen(onFinished = { SovereignApp.tourSeen = true })
+                        earlierExit != null -> Box(Modifier.safeDrawingPadding()) {
+                            CrashReportScreen(
+                                report = earlierExit,
+                                headline = "The app stopped last time",
+                                doneLabel = "Continue",
+                                onDone = { SovereignApp.earlierExitReport = null },
+                            )
+                        }
+                        !SovereignApp.tourSeen -> Box(Modifier.safeDrawingPadding()) {
+                            TourScreen(onFinished = { SovereignApp.tourSeen = true })
+                        }
                         else -> AppScreens()
                     }
                 }

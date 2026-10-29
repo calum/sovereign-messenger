@@ -29,7 +29,7 @@ private fun readConversation(core: CoreBridge, peer: String) =
     ConversationSnapshot(core.conversation(peer), core.unreadCount(peer))
 
 private fun readContacts(core: CoreBridge): List<ContactRow> =
-    core.pinnedPeers()
+    chatListPeers(core.pinnedPeers(), core.peers())
         .map { peer ->
             ContactRow(
                 name = peer,

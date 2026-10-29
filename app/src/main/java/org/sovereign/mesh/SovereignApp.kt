@@ -80,7 +80,7 @@ class SovereignApp : Application() {
             }
             tor = TorController(core, torDir)
             tor.start(appScope)
-            connections = PeerConnections(core) { tor.snapshot }
+            connections = PeerConnections(core, { tor.snapshot }, tor::note)
             connections.start(appScope)
         }
 

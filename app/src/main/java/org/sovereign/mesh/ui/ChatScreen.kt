@@ -120,6 +120,7 @@ fun ChatScreen(peer: String, onBack: () -> Unit, onRemoved: () -> Unit) {
                 .consumeWindowInsets(padding)
                 .imePadding(),
         ) {
+            if (!torReady) TorStatusCard(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
             connections.problems[peer]?.let { problem ->
                 Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
                     Text(
