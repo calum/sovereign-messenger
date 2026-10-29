@@ -8,7 +8,7 @@
 //! authenticity of their contents is decided by the ratchet, not by this layer.
 
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -64,6 +64,11 @@ pub trait Transport: Send + Sync {
     fn is_onion(&self) -> bool {
         false
     }
+
+    /// Ends the connection so the peer sees it drop. Used when the session is declared dead
+    /// while the carrier is still up; without it the peer would keep writing into a socket
+    /// nobody reads. Best effort, never fails.
+    fn close(&self) {}
 }
 
 /// One TCP connection. Each frame is a 4-byte big-endian length, then the body.
@@ -168,6 +173,10 @@ impl Transport for TcpTransport {
         let mut body = vec![0u8; len];
         read_exact_by(&mut stream, &mut body, deadline)?;
         Ok(Some(body))
+    }
+
+    fn close(&self) {
+        let _ = self.stream.shutdown(Shutdown::Both);
     }
 }
 

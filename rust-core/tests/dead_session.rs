@@ -41,6 +41,8 @@ fn relay_once(bob_addr: String, corrupt: Arc<AtomicU32>) -> String {
                     break;
                 }
             }
+            // Pass Bob's close on to Alice, as a plain network path would.
+            let _ = alice_writer.shutdown(std::net::Shutdown::Both);
         });
         loop {
             let mut len = [0u8; 4];
@@ -184,4 +186,34 @@ fn a_new_handshake_after_the_session_died_restores_messages() {
         .unwrap();
     receive(&bob).unwrap();
     assert_eq!(bob.history("alice".into()).unwrap(), vec!["after redial"]);
+}
+
+#[test]
+fn the_peer_sees_the_drop_and_a_new_handshake_restores_messages() {
+    let (alice, bob) = pinned_pair();
+    let corrupt = Arc::new(AtomicU32::new(0));
+    let bob_addr = free_port();
+    let via = relay_once(bob_addr.clone(), Arc::clone(&corrupt));
+    link(&alice, &bob, &bob_addr, &via);
+    send_corrupted(&alice, &bob, &corrupt, 5);
+    assert!(bob.linked_peers().unwrap().is_empty());
+
+    // Bob closed the socket, so Alice's side fails too instead of writing into the void.
+    let mut seen = None;
+    for _ in 0..100 {
+        if let Err(e) = alice.receive_from_peer("bob".into()) {
+            seen = Some(e);
+            break;
+        }
+    }
+    assert_eq!(seen, Some(FacadeError::Network));
+    assert!(alice.linked_peers().unwrap().is_empty());
+
+    let bob_addr2 = free_port();
+    link(&alice, &bob, &bob_addr2, &bob_addr2);
+    alice
+        .send_over_transport("bob".into(), "back again".into())
+        .unwrap();
+    receive(&bob).unwrap();
+    assert_eq!(bob.history("alice".into()).unwrap(), vec!["back again"]);
 }

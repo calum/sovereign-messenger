@@ -213,7 +213,7 @@ struct Session {
     /// Set when a send or receive on the link failed. A dead link reads as not connected
     /// until a new handshake replaces the session.
     dead: AtomicBool,
-    /// Frames in a row that failed to open or decode. Any good frame resets it. At
+    /// Frames in a row that failed to open. Any good frame resets it. At
     /// `MAX_BAD_OPENS` the session is marked dead so the app runs a new handshake instead
     /// of polling a desynchronised ratchet forever. Touches no lock.
     bad_opens: AtomicU32,
@@ -881,10 +881,12 @@ impl Messenger {
         self.lock()?.last_seen.insert(peer_id.clone(), now_ms());
         let applied = match self.apply_opened(&peer_id, &plaintext) {
             Ok(applied) => applied,
-            Err(FacadeError::Malformed) => {
-                return Err(self.note_bad_open(&peer_id, &session, CoreError::Malformed))
+            Err(e) => {
+                // The frame opened, so the ratchet is in sync; an envelope this build
+                // cannot read (a newer kind) must not count toward declaring it dead.
+                session.bad_opens.store(0, Ordering::Relaxed);
+                return Err(e);
             }
-            Err(e) => return Err(e),
         };
         session.bad_opens.store(0, Ordering::Relaxed);
         if let Some(id) = applied {
@@ -1158,6 +1160,12 @@ impl Messenger {
     /// Marks the session's link dead and records when the contact was last seen.
     fn mark_dead(&self, peer_id: &str, session: &Session) {
         session.dead.store(true, Ordering::Relaxed);
+        // Closing makes the peer's next read fail, so it marks its side dead and redials.
+        // Chains are per direction: without this a peer whose own receives still open would
+        // keep sending into a socket nobody reads.
+        if let Some(link) = &session.link {
+            link.close();
+        }
         if let Ok(mut st) = self.lock() {
             st.last_seen.insert(peer_id.to_owned(), now_ms());
         }
@@ -1394,6 +1402,65 @@ mod update_facade_tests {
             m.verify_update(b"apk".to_vec(), 2, vec![0u8; 64], 1),
             Err(FacadeError::AuthFailed)
         );
+    }
+}
+
+#[cfg(test)]
+mod bad_open_tests {
+    use super::*;
+    use crate::transport::TransportError;
+    use std::collections::VecDeque;
+
+    /// Hands out the frames queued for it, then reports idle.
+    struct Inbox(Mutex<VecDeque<Vec<u8>>>);
+
+    impl Transport for Inbox {
+        fn send(&self, _frame: &[u8]) -> Result<(), TransportError> {
+            Ok(())
+        }
+        fn receive(&self) -> Result<Option<Vec<u8>>, TransportError> {
+            Ok(self.0.lock().unwrap().pop_front())
+        }
+    }
+
+    /// An authentic frame whose envelope kind this build does not know (a newer build's
+    /// message) must not count toward declaring the session dead: it proves the ratchet works.
+    #[test]
+    fn authentic_frames_with_an_unknown_envelope_kind_never_kill_the_session() {
+        let root = Key32([7u8; 32]);
+        let mut sender = DoubleRatchet::new(
+            &root,
+            Role::Initiator,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+        );
+        let inbox = Arc::new(Inbox(Mutex::new(VecDeque::new())));
+        let link: Arc<dyn Transport> = inbox.clone();
+        let session = session_for(
+            &root,
+            Role::Responder,
+            RESPONDER_TO_INITIATOR,
+            INITIATOR_TO_RESPONDER,
+            Some(link),
+        );
+        let bob = Messenger::new();
+        bob.lock()
+            .unwrap()
+            .sessions
+            .insert("a".into(), Arc::new(session));
+
+        for _ in 0..(MAX_BAD_OPENS * 2) {
+            let mut unknown = vec![0xEE];
+            unknown.extend_from_slice(&1u64.to_be_bytes());
+            let sealed = sender.seal(&unknown).unwrap();
+            let frame = wire::encode_message(&sealed);
+            inbox.0.lock().unwrap().push_back(frame);
+            assert_eq!(
+                bob.receive_from_peer("a".into()),
+                Err(FacadeError::Malformed)
+            );
+        }
+        assert_eq!(bob.linked_peers().unwrap(), vec!["a"]);
     }
 }
 

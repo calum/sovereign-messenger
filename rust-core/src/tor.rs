@@ -23,6 +23,8 @@ const IDLE_POLL: Duration = Duration::from_millis(500);
 /// an onion circuit adds seconds of latency and jitter.
 const FRAME_DEADLINE: Duration = Duration::from_secs(60);
 
+/// How long `close` waits for a send in progress before giving up on a clean shutdown.
+const CLOSE_WAIT: Duration = Duration::from_secs(2);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How long the handshake helpers wait for each frame on an onion link.
@@ -151,6 +153,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Transport for StreamTra
 
     fn is_onion(&self) -> bool {
         true
+    }
+
+    /// Shuts the write half so the peer's next read ends. Waits briefly for a send in
+    /// progress; if one is stuck the stream is dropped with the session instead.
+    fn close(&self) {
+        self.handle.block_on(async {
+            if let Ok(mut writer) = tokio::time::timeout(CLOSE_WAIT, self.writer.lock()).await {
+                let _ = writer.close().await;
+            }
+        });
     }
 }
 
