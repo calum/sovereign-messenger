@@ -72,7 +72,7 @@ fn handshake_with_changed_key_is_refused_and_opens_no_session() {
 
     assert_eq!(
         alice
-            .start_session("bob".into(), mallory.own_identity().unwrap(), vec![0u8; 32])
+            .start_session("bob".into(), mallory.own_identity().unwrap(), vec![7u8; 64])
             .map(|_| ()),
         Err(FacadeError::PinChanged)
     );
@@ -160,7 +160,7 @@ fn start_session_without_a_scan_pins_on_first_use() {
     let bob = Messenger::new();
     let mallory = Messenger::new();
     alice
-        .start_session("bob".into(), bob.own_identity().unwrap(), vec![0u8; 32])
+        .start_session("bob".into(), bob.own_identity().unwrap(), vec![7u8; 64])
         .unwrap();
     assert_eq!(
         alice.pin_fingerprint("bob".into()).unwrap(),
@@ -168,7 +168,7 @@ fn start_session_without_a_scan_pins_on_first_use() {
     );
     assert_eq!(
         alice
-            .start_session("bob".into(), mallory.own_identity().unwrap(), vec![0u8; 32])
+            .start_session("bob".into(), mallory.own_identity().unwrap(), vec![7u8; 64])
             .map(|_| ()),
         Err(FacadeError::PinChanged)
     );

@@ -99,7 +99,7 @@ fn send_refused_when_no_transport_is_open() {
     let alice = Messenger::new();
     let bob = Messenger::new();
     alice
-        .start_session("bob".into(), bob.own_identity().unwrap(), vec![0u8; 32])
+        .start_session("bob".into(), bob.own_identity().unwrap(), vec![7u8; 64])
         .unwrap();
     assert_eq!(
         alice.send_over_transport("bob".into(), "x".into()),

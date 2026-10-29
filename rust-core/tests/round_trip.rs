@@ -122,7 +122,7 @@ fn unknown_peer_and_malformed_identity_rejected() {
     bad.x25519.truncate(31);
     assert_eq!(
         alice
-            .start_session("carol".into(), bad, vec![0u8; 32])
+            .start_session("carol".into(), bad, vec![7u8; 64])
             .map(|_| ()),
         Err(FacadeError::Malformed)
     );

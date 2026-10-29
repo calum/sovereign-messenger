@@ -281,9 +281,10 @@ struct State {
     /// The peer a `listen_for_peer` call is waiting for, set only while it runs.
     /// Lets the UI show that a listener is up without a second source of truth.
     listening: Option<String>,
-    /// The challenge last issued by `responder_challenge`. Spent by the next
-    /// `accept_session`, whatever its outcome, so it cannot authenticate a second handshake.
-    pending_challenge: Option<[u8; CHALLENGE_LEN]>,
+    /// The challenge last issued by `responder_challenge`, with its ephemeral secret.
+    /// Spent by the next `accept_session`, whatever its outcome, so neither the challenge
+    /// nor the ephemeral key can serve a second handshake. Dropping it zeroizes the secret.
+    pending_challenge: Option<handshake::Challenge>,
     /// When each contact's link last came up, delivered something, or dropped (Unix ms).
     last_seen: HashMap<String, u64>,
     /// Newest message the user has read whose read receipt is not yet sent, per contact.
@@ -496,18 +497,22 @@ impl Messenger {
         Ok(())
     }
 
-    /// Responder side, first step: issues a fresh challenge and remembers it as the
-    /// one the next `accept_session` must answer. The caller sends these bytes to the
-    /// initiator, who passes them to `start_session`. A new call replaces the old challenge.
+    /// Responder side, first step: issues a fresh challenge and a fresh ephemeral X25519
+    /// key, and remembers them as the pair the next `accept_session` must answer. Returns
+    /// 64 bytes, `challenge (32) || ephemeral public key (32)`. The caller sends these bytes
+    /// to the initiator, who passes them to `start_session`. A new call replaces (and
+    /// zeroizes) the old pair.
     pub fn responder_challenge(&self) -> Result<Vec<u8>, FacadeError> {
         let challenge = handshake::new_challenge();
+        let offer = challenge.offer();
         self.lock()?.pending_challenge = Some(challenge);
-        Ok(challenge.to_vec())
+        Ok(offer_to_bytes(&offer))
     }
 
     /// Initiator side: encapsulate to the peer's identity and open a session, bound to
-    /// the responder's `challenge`. Pins the identity on first use; refuses a different
-    /// key for a pinned peer.
+    /// the responder's `challenge` (the 64 bytes `responder_challenge` returned, any other
+    /// length is `Malformed`). Pins the identity on first use; refuses a different key for
+    /// a pinned peer, and a low-order responder key (static or ephemeral) as `Malformed`.
     pub fn start_session(
         &self,
         peer_id: String,
@@ -515,7 +520,7 @@ impl Messenger {
         challenge: Vec<u8>,
     ) -> Result<HandshakeMessage, FacadeError> {
         let peer = to_core_public(peer)?;
-        let challenge = to_array32(&challenge)?;
+        let challenge = offer_from_bytes(&challenge)?;
         let mut st = self.lock()?;
         let (init, root) = handshake::initiate(&st.identity, &peer, &challenge)?;
         pin_or_check(&mut st, &peer_id, &peer)?;
@@ -538,8 +543,8 @@ impl Messenger {
     }
 
     /// Responder side: derive the same root from the initiator's handshake message.
-    /// `challenge` must be the one `responder_challenge` issued, and it is spent by
-    /// this call whatever the outcome. Refuses with `NotPinned` if `peer_id` has no
+    /// `challenge` must be the 64 bytes `responder_challenge` issued, and the challenge
+    /// and its ephemeral secret are spent by this call whatever the outcome. Refuses with `NotPinned` if `peer_id` has no
     /// pin, and with `AuthFailed` if the initiator's static key is not the pinned one,
     /// if the challenge is not the pending one, or if the confirmation tag does not
     /// verify. No session is stored on any refusal, so a replay leaves a live session alone.
@@ -549,7 +554,7 @@ impl Messenger {
         init: HandshakeMessage,
         challenge: Vec<u8>,
     ) -> Result<(), FacadeError> {
-        let challenge = to_array32(&challenge)?;
+        let challenge = offer_from_bytes(&challenge)?;
         let init = handshake::HandshakeInit {
             ephemeral_x25519: to_array32(&init.ephemeral_x25519)?,
             initiator_x25519: to_array32(&init.initiator_x25519)?,
@@ -559,7 +564,7 @@ impl Messenger {
         let mut st = self.lock()?;
         let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
         let issued = st.pending_challenge.take().ok_or(FacadeError::AuthFailed)?;
-        if issued != challenge {
+        if issued.offer() != challenge {
             return Err(FacadeError::AuthFailed);
         }
         let root = handshake::respond(&st.identity, &pinned, &init, &issued)?;
@@ -1317,7 +1322,8 @@ impl Messenger {
         peer_id: String,
         link: Arc<dyn Transport>,
     ) -> Result<(), FacadeError> {
-        // The responder speaks first with its challenge; the handshake is built on it.
+        // The responder speaks first with its challenge and ephemeral key; the handshake
+        // is built on both.
         let challenge = wire::receive_challenge(link.as_ref())?;
         let (init, root) = {
             let st = self.lock()?;
@@ -1347,11 +1353,12 @@ impl Messenger {
         link: Arc<dyn Transport>,
         expected: Option<&str>,
     ) -> Result<String, FacadeError> {
-        // A fresh challenge per connection, sent before the initiator's handshake.
-        // The handshake must answer this one, so a captured handshake from an earlier
-        // connection fails its tag here and the live session is not replaced.
+        // A fresh challenge and ephemeral key per connection, sent before the initiator's
+        // handshake. The handshake must answer this one, so a captured handshake from an
+        // earlier connection fails its tag here and the live session is not replaced. The
+        // ephemeral secret lives in this frame only and is zeroized when it returns.
         let challenge = handshake::new_challenge();
-        wire::send_challenge(link.as_ref(), &challenge)?;
+        wire::send_challenge(link.as_ref(), &challenge.offer())?;
         let init = wire::receive_handshake(link.as_ref())?;
         let mut st = self.lock()?;
         let peer_id = match expected {
@@ -1463,6 +1470,25 @@ fn to_core_public(p: PublicIdentity) -> Result<IdentityPublic, FacadeError> {
 
 fn to_array32(bytes: &[u8]) -> Result<[u8; 32], FacadeError> {
     bytes.try_into().map_err(|_| FacadeError::Malformed)
+}
+
+/// The responder's challenge as the in-process caller carries it: nonce, then ephemeral public key.
+fn offer_to_bytes(offer: &handshake::ChallengeOffer) -> Vec<u8> {
+    let mut out = Vec::with_capacity(CHALLENGE_LEN + 32);
+    out.extend_from_slice(&offer.nonce);
+    out.extend_from_slice(&offer.ephemeral);
+    out
+}
+
+/// Exactly 64 bytes, or `Malformed` (the old 32-byte challenge is refused here).
+fn offer_from_bytes(bytes: &[u8]) -> Result<handshake::ChallengeOffer, FacadeError> {
+    if bytes.len() != CHALLENGE_LEN + 32 {
+        return Err(FacadeError::Malformed);
+    }
+    Ok(handshake::ChallengeOffer {
+        nonce: to_array32(&bytes[..CHALLENGE_LEN])?,
+        ephemeral: to_array32(&bytes[CHALLENGE_LEN..])?,
+    })
 }
 
 #[cfg(test)]

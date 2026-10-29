@@ -7,8 +7,6 @@ use rust_core::handshake::{self, Identity};
 use rust_core::pairing;
 use rust_core::CoreError;
 
-const CH: [u8; 32] = [7u8; 32];
-
 fn hex32(s: &str) -> [u8; 32] {
     let mut out = [0u8; 32];
     for (i, b) in out.iter_mut().enumerate() {
@@ -74,11 +72,12 @@ fn qr_decode_still_accepts_a_real_key() {
 fn initiate_refuses_a_low_order_responder_static_key() {
     let (alice, _) = Identity::generate();
     let (_bob, bob_pub) = Identity::generate();
+    let ch = handshake::new_challenge().offer();
     for p in low_order_points() {
         let mut bad = bob_pub.clone();
         bad.x25519 = p;
         assert_eq!(
-            handshake::initiate(&alice, &bad, &CH).err(),
+            handshake::initiate(&alice, &bad, &ch).err(),
             Some(CoreError::Malformed)
         );
     }
@@ -88,12 +87,13 @@ fn initiate_refuses_a_low_order_responder_static_key() {
 fn respond_refuses_a_low_order_ephemeral_key() {
     let (alice, alice_pub) = Identity::generate();
     let (bob, bob_pub) = Identity::generate();
-    let (good, _) = handshake::initiate(&alice, &bob_pub, &CH).unwrap();
+    let ch = handshake::new_challenge();
+    let (good, _) = handshake::initiate(&alice, &bob_pub, &ch.offer()).unwrap();
     for p in low_order_points() {
         let mut init = good.clone();
         init.ephemeral_x25519 = p;
         assert_eq!(
-            handshake::respond(&bob, &alice_pub.x25519, &init, &CH).err(),
+            handshake::respond(&bob, &alice_pub.x25519, &init, &ch).err(),
             Some(CoreError::Malformed)
         );
     }
@@ -103,13 +103,28 @@ fn respond_refuses_a_low_order_ephemeral_key() {
 fn respond_refuses_a_low_order_initiator_static_key() {
     let (alice, _) = Identity::generate();
     let (bob, bob_pub) = Identity::generate();
-    let (good, _) = handshake::initiate(&alice, &bob_pub, &CH).unwrap();
+    let ch = handshake::new_challenge();
+    let (good, _) = handshake::initiate(&alice, &bob_pub, &ch.offer()).unwrap();
     for p in low_order_points() {
         let mut init = good.clone();
         init.initiator_x25519 = p;
         // Pinned to the same bad key, so the pin check passes and the DH check is reached.
         assert_eq!(
-            handshake::respond(&bob, &p, &init, &CH).err(),
+            handshake::respond(&bob, &p, &init, &ch).err(),
+            Some(CoreError::Malformed)
+        );
+    }
+}
+
+#[test]
+fn initiate_refuses_a_low_order_responder_ephemeral_key() {
+    let (alice, _) = Identity::generate();
+    let (_bob, bob_pub) = Identity::generate();
+    for p in low_order_points() {
+        let mut offer = handshake::new_challenge().offer();
+        offer.ephemeral = p;
+        assert_eq!(
+            handshake::initiate(&alice, &bob_pub, &offer).err(),
             Some(CoreError::Malformed)
         );
     }

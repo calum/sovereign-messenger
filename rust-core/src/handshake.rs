@@ -1,16 +1,27 @@
 //! Hybrid key agreement: X25519 + ML-KEM-768 (FIPS 203), with static-static DH
 //! between the two long-term X25519 identity keys.
-//! Three secrets feed one HKDF: the ephemeral DH, the ML-KEM secret, and the
-//! static DH. The ML-KEM part defeats store-now-decrypt-later. The static DH
+//! Four secrets feed one HKDF: the initiator-ephemeral DH to the responder's
+//! static key, the ML-KEM secret, the static DH, and (v2) the DH between the two
+//! ephemeral keys. The ML-KEM part defeats store-now-decrypt-later. The static DH
 //! authenticates the initiator: only the holder of the initiator's identity key
 //! can compute it, so a responder that checks the initiator's static key against
 //! its pin refuses everyone else.
 //!
+//! Forward secrecy against later key compromise (v2): the first three secrets all
+//! target the responder's long-term keys, so stealing those later would reopen the
+//! root of a recorded session. The responder therefore sends a fresh ephemeral
+//! X25519 public key with its challenge and keeps the secret only for that one
+//! handshake. `DH(initiator ephemeral, responder ephemeral)` is the fourth input,
+//! and the long-term keys alone cannot recompute it. All version labels say `v2`,
+//! so a v1 peer and a v2 peer can never derive the same root.
+//!
 //! Freshness: the responder first sends a random challenge. The initiator binds
 //! it into the root and into a key-confirmation tag (HMAC-SHA256 keyed with the
 //! root). A captured handshake replayed later carries an old challenge, so its
-//! tag fails here and no session is stored. The tag adds no authentication beyond
-//! the static DH: it proves only that the initiator derived the same root.
+//! tag fails here and no session is stored. The tag also covers the responder's
+//! ephemeral public key, so it cannot be swapped in transit. The tag adds no
+//! authentication beyond the static DH: it proves only that the initiator derived
+//! the same root.
 
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -28,15 +39,18 @@ type DecapKey = <MlKem768 as Kem>::DecapsulationKey;
 type EncapKey = <MlKem768 as Kem>::EncapsulationKey;
 type HmacSha256 = Hmac<Sha256>;
 
-const ROOT_INFO: &[u8] = b"sovereign-p2p v1 root";
+const ROOT_INFO: &[u8] = b"sovereign-p2p v2 root";
 /// Labels the static-static DH input inside the HKDF input keying material, so
 /// it cannot be confused with the ephemeral DH or the ML-KEM secret.
-const STATIC_DH_LABEL: &[u8] = b"sovereign-p2p v1 static dh";
+const STATIC_DH_LABEL: &[u8] = b"sovereign-p2p v2 static dh";
+/// Labels the DH between the two ephemeral keys, the input a stolen long-term key
+/// cannot reproduce.
+const RESPONDER_EPH_DH_LABEL: &[u8] = b"sovereign-p2p v2 responder ephemeral dh";
 /// Labels the responder's challenge inside the HKDF input, so a root derived with
 /// one challenge cannot be confused with a root derived with another.
-const CHALLENGE_LABEL: &[u8] = b"sovereign-p2p v1 challenge";
+const CHALLENGE_LABEL: &[u8] = b"sovereign-p2p v2 challenge";
 /// Domain label for the key-confirmation tag, so the MAC is not valid for any other input.
-const CONFIRM_LABEL: &[u8] = b"sovereign-p2p v1 key confirmation";
+const CONFIRM_LABEL: &[u8] = b"sovereign-p2p v2 key confirmation";
 
 /// Length of the responder's challenge, in bytes.
 pub const CHALLENGE_LEN: usize = 32;
@@ -141,21 +155,54 @@ pub struct HandshakeInit {
     pub tag: [u8; TAG_LEN],
 }
 
-/// A fresh random challenge for one handshake. The responder issues it before the
-/// initiator speaks, and it is never reused.
-pub fn new_challenge() -> [u8; CHALLENGE_LEN] {
-    let mut c = [0u8; CHALLENGE_LEN];
-    random_fill(&mut c);
-    c
+/// What the initiator receives from the responder: the challenge and the responder's
+/// ephemeral X25519 public key. Public values only.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ChallengeOffer {
+    pub nonce: [u8; CHALLENGE_LEN],
+    pub ephemeral: [u8; 32],
 }
 
-/// Initiator side. Takes the responder's challenge for this handshake. Returns the
-/// message to send and the derived root key. Returns `CoreError::Malformed` if the
-/// responder's X25519 key is a low-order point.
+/// The responder's side of one challenge: the offer plus the ephemeral secret behind
+/// its public key. Issued before the initiator speaks and never reused: the caller
+/// drops it once the handshake that answers it has been processed or it is replaced.
+/// No `Clone` and no `Debug`; `StaticSecret` zeroizes on drop.
+pub struct Challenge {
+    nonce: [u8; CHALLENGE_LEN],
+    eph_secret: StaticSecret,
+    eph_public: [u8; 32],
+}
+
+impl Challenge {
+    /// The public half, for the challenge frame.
+    pub fn offer(&self) -> ChallengeOffer {
+        ChallengeOffer {
+            nonce: self.nonce,
+            ephemeral: self.eph_public,
+        }
+    }
+}
+
+/// A fresh random challenge and a fresh responder ephemeral key for one handshake.
+pub fn new_challenge() -> Challenge {
+    let mut nonce = [0u8; CHALLENGE_LEN];
+    random_fill(&mut nonce);
+    let eph_secret = StaticSecret::random_from_rng(OsRng);
+    let eph_public = PublicKey::from(&eph_secret).to_bytes();
+    Challenge {
+        nonce,
+        eph_secret,
+        eph_public,
+    }
+}
+
+/// Initiator side. Takes the responder's challenge offer for this handshake. Returns
+/// the message to send and the derived root key. Returns `CoreError::Malformed` if the
+/// responder's static or ephemeral X25519 key is a low-order point.
 pub fn initiate(
     me: &Identity,
     peer: &IdentityPublic,
-    challenge: &[u8; CHALLENGE_LEN],
+    challenge: &ChallengeOffer,
 ) -> Result<(HandshakeInit, Key32), CoreError> {
     let eph = StaticSecret::random_from_rng(OsRng);
     let mut m: B32 = [0u8; 32].into();
@@ -172,18 +219,24 @@ fn initiate_with(
     peer: &IdentityPublic,
     eph: &StaticSecret,
     m: &B32,
-    challenge: &[u8; CHALLENGE_LEN],
+    challenge: &ChallengeOffer,
 ) -> Result<(HandshakeInit, Key32), CoreError> {
     let ek = EncapKey::new_from_slice(&peer.mlkem_ek).map_err(|_| CoreError::Malformed)?;
     let (ct, mut ss) = ek.encapsulate_deterministic(m);
 
     let mut eph_dh = eph.diffie_hellman(&PublicKey::from(peer.x25519));
     let mut static_dh = me_static.diffie_hellman(&PublicKey::from(peer.x25519));
-    // A low-order responder key gives an all-zero output that no secret influences.
-    // Refused before the root is derived; the shared secrets are wiped on the way out.
-    if !(eph_dh.was_contributory() && static_dh.was_contributory()) {
+    let mut resp_eph_dh = eph.diffie_hellman(&PublicKey::from(challenge.ephemeral));
+    // A low-order responder key (static or ephemeral) gives an all-zero output that no
+    // secret influences. Refused before the root is derived; the shared secrets are
+    // wiped on the way out.
+    if !(eph_dh.was_contributory()
+        && static_dh.was_contributory()
+        && resp_eph_dh.was_contributory())
+    {
         eph_dh.zeroize();
         static_dh.zeroize();
+        resp_eph_dh.zeroize();
         ss.zeroize();
         return Err(CoreError::Malformed);
     }
@@ -192,10 +245,12 @@ fn initiate_with(
         eph_dh.as_bytes(),
         ss.as_slice(),
         static_dh.as_bytes(),
-        challenge,
+        resp_eph_dh.as_bytes(),
+        &challenge.nonce,
     );
     eph_dh.zeroize();
     static_dh.zeroize();
+    resp_eph_dh.zeroize();
     ss.zeroize();
 
     let ephemeral_x25519 = PublicKey::from(eph).to_bytes();
@@ -226,13 +281,14 @@ fn initiate_with(
 /// challenge it issued for this handshake. The handshake is refused with
 /// `CoreError::Auth` unless the initiator's static key equals that pin, with
 /// `CoreError::Malformed` if either initiator key is a low-order point (a
-/// non-contributory DH output), and unless the confirmation tag verifies under the root derived with that challenge. A
-/// replayed handshake fails the tag, so no root is returned for it.
+/// non-contributory DH output), and unless the confirmation tag verifies under the root
+/// derived with that challenge and its ephemeral secret. A replayed handshake fails the
+/// tag, so no root is returned for it.
 pub fn respond(
     me: &Identity,
     pinned_initiator: &[u8; 32],
     init: &HandshakeInit,
-    challenge: &[u8; CHALLENGE_LEN],
+    challenge: &Challenge,
 ) -> Result<Key32, CoreError> {
     // Checked before any decapsulation: a stranger is refused at the pin, and the
     // ML-KEM and DH work is never done for it.
@@ -250,11 +306,18 @@ pub fn respond(
     let mut static_dh = me
         .x25519
         .diffie_hellman(&PublicKey::from(init.initiator_x25519));
+    let mut resp_eph_dh = challenge
+        .eph_secret
+        .diffie_hellman(&PublicKey::from(init.ephemeral_x25519));
     // Low-order ephemeral or static initiator keys give an all-zero output. Refused
     // before the root is derived, so the tag check never runs on a degenerate root.
-    if !(eph_dh.was_contributory() && static_dh.was_contributory()) {
+    if !(eph_dh.was_contributory()
+        && static_dh.was_contributory()
+        && resp_eph_dh.was_contributory())
+    {
         eph_dh.zeroize();
         static_dh.zeroize();
+        resp_eph_dh.zeroize();
         ss.zeroize();
         return Err(CoreError::Malformed);
     }
@@ -263,10 +326,12 @@ pub fn respond(
         eph_dh.as_bytes(),
         ss.as_slice(),
         static_dh.as_bytes(),
-        challenge,
+        resp_eph_dh.as_bytes(),
+        &challenge.nonce,
     );
     eph_dh.zeroize();
     static_dh.zeroize();
+    resp_eph_dh.zeroize();
     ss.zeroize();
 
     // Constant-time comparison (hmac's verify_slice). Checked before the root is returned,
@@ -276,21 +341,22 @@ pub fn respond(
         &init.ephemeral_x25519,
         &init.initiator_x25519,
         &init.mlkem_ct,
-        challenge,
+        &challenge.offer(),
     )
     .verify_slice(&init.tag)
     .map_err(|_| CoreError::Auth)?;
     Ok(root)
 }
 
-/// The keyed MAC over the public handshake values and the challenge. Keyed with the
-/// root, so only a party that derived the same root can produce the tag.
+/// The keyed MAC over the public handshake values, the challenge and the responder's
+/// ephemeral public key. Keyed with the root, so only a party that derived the same
+/// root can produce the tag; covering the responder key means it cannot be swapped.
 fn confirmation_mac(
     root: &Key32,
     ephemeral: &[u8; 32],
     initiator: &[u8; 32],
     mlkem_ct: &[u8],
-    challenge: &[u8; CHALLENGE_LEN],
+    challenge: &ChallengeOffer,
 ) -> HmacSha256 {
     // HMAC accepts a key of any length, so this cannot fail for a 32-byte root.
     let mut mac = HmacSha256::new_from_slice(&root.0).expect("HMAC takes any key length");
@@ -298,7 +364,8 @@ fn confirmation_mac(
     mac.update(ephemeral);
     mac.update(initiator);
     mac.update(mlkem_ct);
-    mac.update(challenge);
+    mac.update(&challenge.nonce);
+    mac.update(&challenge.ephemeral);
     mac
 }
 
@@ -307,15 +374,25 @@ fn random_fill(buf: &mut [u8]) {
 }
 
 /// Concatenates the DH and KEM outputs and the challenge in a fixed order and runs
-/// HKDF. The static DH and the challenge are each preceded by their label so they
-/// are tagged inputs. Every input has a fixed length, so the concatenation is
-/// unambiguous. The challenge makes the root depend on this handshake only.
-fn derive_root(eph_dh: &[u8], ss: &[u8], static_dh: &[u8], challenge: &[u8]) -> Key32 {
+/// HKDF: `eph_dh || ss || static label || static_dh || responder-ephemeral label ||
+/// resp_eph_dh || challenge label || challenge`. The last three inputs are each
+/// preceded by their label so they are tagged. Every input has a fixed length, so the
+/// concatenation is unambiguous. The challenge makes the root depend on this handshake
+/// only, and `resp_eph_dh` makes it depend on a secret the long-term keys do not hold.
+fn derive_root(
+    eph_dh: &[u8],
+    ss: &[u8],
+    static_dh: &[u8],
+    resp_eph_dh: &[u8],
+    challenge: &[u8],
+) -> Key32 {
     let mut ikm = Vec::with_capacity(
         eph_dh.len()
             + ss.len()
             + STATIC_DH_LABEL.len()
             + static_dh.len()
+            + RESPONDER_EPH_DH_LABEL.len()
+            + resp_eph_dh.len()
             + CHALLENGE_LABEL.len()
             + challenge.len(),
     );
@@ -323,6 +400,8 @@ fn derive_root(eph_dh: &[u8], ss: &[u8], static_dh: &[u8], challenge: &[u8]) -> 
     ikm.extend_from_slice(ss);
     ikm.extend_from_slice(STATIC_DH_LABEL);
     ikm.extend_from_slice(static_dh);
+    ikm.extend_from_slice(RESPONDER_EPH_DH_LABEL);
+    ikm.extend_from_slice(resp_eph_dh);
     ikm.extend_from_slice(CHALLENGE_LABEL);
     ikm.extend_from_slice(challenge);
 
@@ -359,7 +438,7 @@ mod tests {
         let (bob, bob_pub) = Identity::generate();
         let (alice, alice_pub) = Identity::generate();
         let c = new_challenge();
-        let (init, root_a) = initiate(&alice, &bob_pub, &c).unwrap();
+        let (init, root_a) = initiate(&alice, &bob_pub, &c.offer()).unwrap();
         let root_b = respond(&bob, &alice_pub.x25519, &init, &c).unwrap();
         assert_eq!(root_a.0, root_b.0);
     }
@@ -370,7 +449,7 @@ mod tests {
         let (alice, alice_pub) = Identity::generate();
         let (impostor, _) = Identity::generate();
         let c = new_challenge();
-        let (init, _root_a) = initiate(&alice, &public, &c).unwrap();
+        let (init, _root_a) = initiate(&alice, &public, &c.offer()).unwrap();
         // The impostor derives a different root, so the tag fails and no root is returned.
         assert_eq!(
             respond(&impostor, &alice_pub.x25519, &init, &c).err(),
@@ -385,7 +464,7 @@ mod tests {
         let (mallory, _) = Identity::generate();
         let eph = StaticSecret::random_from_rng(OsRng);
         let m: B32 = [7u8; 32].into();
-        let c = [1u8; CHALLENGE_LEN];
+        let c = new_challenge().offer();
 
         let (init_a, root_a) = initiate_with(&alice.x25519, &bob_pub, &eph, &m, &c).unwrap();
         let (init_m, root_m) = initiate_with(&mallory.x25519, &bob_pub, &eph, &m, &c).unwrap();
@@ -400,7 +479,7 @@ mod tests {
         let (real, public) = Identity::generate();
         let (alice, alice_pub) = Identity::generate();
         let c = new_challenge();
-        let (init, _root_a) = initiate(&alice, &public, &c).unwrap();
+        let (init, _root_a) = initiate(&alice, &public, &c.offer()).unwrap();
         // Same ML-KEM decapsulation key, different X25519 static key: only the
         // static DH can tell these two responders apart, and the tag catches it.
         let half_wrong = Identity {
@@ -436,5 +515,97 @@ mod tests {
         let (_a, a) = Identity::generate();
         let (_b, b) = Identity::generate();
         assert_ne!(a.onion, b.onion);
+    }
+
+    #[test]
+    fn responder_long_term_keys_and_transcript_do_not_yield_the_root() {
+        let (bob, bob_pub) = Identity::generate();
+        let (alice, alice_pub) = Identity::generate();
+        let c = new_challenge();
+        let offer = c.offer();
+        let (init, root) = initiate(&alice, &bob_pub, &offer).unwrap();
+        assert_eq!(
+            respond(&bob, &alice_pub.x25519, &init, &c).unwrap().0,
+            root.0
+        );
+
+        // The attacker later steals bob's static X25519 key and ML-KEM key and holds
+        // the transcript: the challenge frame (nonce, responder ephemeral public) and
+        // the handshake frame. Everything the v1 root used can be recomputed from them.
+        let ss = bob.mlkem_dk.decapsulate_slice(&init.mlkem_ct).unwrap();
+        let eph_dh = bob
+            .x25519
+            .diffie_hellman(&PublicKey::from(init.ephemeral_x25519));
+        let static_dh = bob
+            .x25519
+            .diffie_hellman(&PublicKey::from(init.initiator_x25519));
+
+        // With the old three inputs only (no ephemeral-ephemeral DH): a different root.
+        let three_only = derive_root(
+            eph_dh.as_bytes(),
+            ss.as_slice(),
+            static_dh.as_bytes(),
+            &[],
+            &offer.nonce,
+        );
+        assert_ne!(three_only.0, root.0);
+        // Substituting a value the attacker can compute for the missing ephemeral DH
+        // (here the static-key DH with the initiator ephemeral): also wrong.
+        let substituted = derive_root(
+            eph_dh.as_bytes(),
+            ss.as_slice(),
+            static_dh.as_bytes(),
+            eph_dh.as_bytes(),
+            &offer.nonce,
+        );
+        assert_ne!(substituted.0, root.0);
+
+        // Control: the same reconstruction with the ephemeral secret does give the root,
+        // so the difference above is exactly the missing ephemeral secret.
+        let resp_eph_dh = c
+            .eph_secret
+            .diffie_hellman(&PublicKey::from(init.ephemeral_x25519));
+        let with_secret = derive_root(
+            eph_dh.as_bytes(),
+            ss.as_slice(),
+            static_dh.as_bytes(),
+            resp_eph_dh.as_bytes(),
+            &offer.nonce,
+        );
+        assert_eq!(with_secret.0, root.0);
+    }
+
+    #[test]
+    fn confirmation_tag_covers_the_responder_ephemeral_key() {
+        let root = Key32([5u8; 32]);
+        let offer = new_challenge().offer();
+        let mut other = offer;
+        other.ephemeral[0] ^= 1;
+        let tag = |o: &ChallengeOffer| {
+            confirmation_mac(&root, &[1u8; 32], &[2u8; 32], &[3u8; 8], o)
+                .finalize()
+                .into_bytes()
+        };
+        assert_ne!(tag(&offer), tag(&other));
+    }
+
+    #[test]
+    fn challenge_secret_type_has_no_debug_or_clone() {
+        {
+            let value = Probe::<Challenge>::DEBUG;
+            assert!(!value);
+        }
+        {
+            let value = Probe::<Challenge>::CLONE;
+            assert!(!value);
+        }
+    }
+
+    #[test]
+    fn each_challenge_has_its_own_ephemeral_key() {
+        let a = new_challenge().offer();
+        let b = new_challenge().offer();
+        assert_ne!(a.ephemeral, b.ephemeral);
+        assert_ne!(a.nonce, b.nonce);
     }
 }

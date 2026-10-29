@@ -31,7 +31,7 @@ fn handshake_then_ratchet_both_directions_over_tcp() {
     let responder = std::thread::spawn(move || {
         // The responder speaks first: its challenge must arrive before the handshake.
         let challenge = handshake::new_challenge();
-        wire::send_challenge(&server, &challenge).unwrap();
+        wire::send_challenge(&server, &challenge.offer()).unwrap();
         let init = wire::receive_handshake(&server).unwrap();
         let root = handshake::respond(&me, &alice_pub.x25519, &init, &challenge).unwrap();
         let mut session = DoubleRatchet::new(
