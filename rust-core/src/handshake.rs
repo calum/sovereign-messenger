@@ -150,7 +150,8 @@ pub fn new_challenge() -> [u8; CHALLENGE_LEN] {
 }
 
 /// Initiator side. Takes the responder's challenge for this handshake. Returns the
-/// message to send and the derived root key.
+/// message to send and the derived root key. Returns `CoreError::Malformed` if the
+/// responder's X25519 key is a low-order point.
 pub fn initiate(
     me: &Identity,
     peer: &IdentityPublic,
@@ -178,6 +179,14 @@ fn initiate_with(
 
     let mut eph_dh = eph.diffie_hellman(&PublicKey::from(peer.x25519));
     let mut static_dh = me_static.diffie_hellman(&PublicKey::from(peer.x25519));
+    // A low-order responder key gives an all-zero output that no secret influences.
+    // Refused before the root is derived; the shared secrets are wiped on the way out.
+    if !(eph_dh.was_contributory() && static_dh.was_contributory()) {
+        eph_dh.zeroize();
+        static_dh.zeroize();
+        ss.zeroize();
+        return Err(CoreError::Malformed);
+    }
 
     let root = derive_root(
         eph_dh.as_bytes(),
@@ -215,8 +224,9 @@ fn initiate_with(
 
 /// Responder side. The caller passes the X25519 key pinned for this peer and the
 /// challenge it issued for this handshake. The handshake is refused with
-/// `CoreError::Auth` unless the initiator's static key equals that pin, and unless
-/// the confirmation tag verifies under the root derived with that challenge. A
+/// `CoreError::Auth` unless the initiator's static key equals that pin, with
+/// `CoreError::Malformed` if either initiator key is a low-order point (a
+/// non-contributory DH output), and unless the confirmation tag verifies under the root derived with that challenge. A
 /// replayed handshake fails the tag, so no root is returned for it.
 pub fn respond(
     me: &Identity,
@@ -240,6 +250,14 @@ pub fn respond(
     let mut static_dh = me
         .x25519
         .diffie_hellman(&PublicKey::from(init.initiator_x25519));
+    // Low-order ephemeral or static initiator keys give an all-zero output. Refused
+    // before the root is derived, so the tag check never runs on a degenerate root.
+    if !(eph_dh.was_contributory() && static_dh.was_contributory()) {
+        eph_dh.zeroize();
+        static_dh.zeroize();
+        ss.zeroize();
+        return Err(CoreError::Malformed);
+    }
 
     let root = derive_root(
         eph_dh.as_bytes(),
