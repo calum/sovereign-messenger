@@ -75,7 +75,7 @@ class IdentityResetTest {
         val oldFingerprint = old.ownFingerprint()
         val steps = mutableListOf<String>()
         var fresh: CoreBridge? = null
-        val failure = assertThrows(RuntimeException::class.java) {
+        val failure = run {
             resetIdentity(
                 old = old,
                 stopConnections = { steps += "connections" },
@@ -89,8 +89,38 @@ class IdentityResetTest {
                 release = { throw RuntimeException("wipe") },
             )
         }
-        assertEquals("tor", failure.message)
+        assertEquals("tor", failure!!.message)
         assertEquals(listOf("connections", "files", "vault", "start"), steps)
         assertNotEquals(oldFingerprint, fresh!!.ownFingerprint())
+    }
+
+    @Test
+    fun startNewStillRunsWhenVaultDeleteThrowsEvenWithAnError() {
+        val old = bobWithChat()
+        var started = false
+        val failure = resetIdentity(
+            old = old,
+            stopConnections = { throw UnsatisfiedLinkError("native") },
+            stopTor = {},
+            deleteLocalFiles = {},
+            deleteVault = { throw RuntimeException("vault") },
+            startNew = { started = true },
+        )
+        assertTrue(started)
+        assertTrue(failure is UnsatisfiedLinkError)
+    }
+
+    @Test
+    fun navigationRunsAndFailureIsReportedWithoutEscaping() {
+        var navigated = false
+        val clean = completeReset(reset = { RuntimeException("x") }, navigate = { navigated = true })
+        assertTrue(navigated)
+        assertEquals(false, clean)
+        navigated = false
+        completeReset(reset = { throw IllegalStateException("boom") }, navigate = { navigated = true })
+        assertTrue(navigated)
+        navigated = false
+        assertEquals(true, completeReset(reset = { null }, navigate = { navigated = true }))
+        assertTrue(navigated)
     }
 }
