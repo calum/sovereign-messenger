@@ -444,6 +444,9 @@ impl Messenger {
         let mut st = self.lock()?;
         st.pins.remove(&peer_id);
         st.sessions.remove(&peer_id);
+        // A receipt owed for an id of the old conversation must not be sent into the next one.
+        st.read_owed.remove(&peer_id);
+        st.last_seen.remove(&peer_id);
         Ok(())
     }
 
@@ -984,6 +987,10 @@ impl Messenger {
         let mut st = self.lock()?;
         st.store.forget(&peer_id);
         st.sessions.remove(&peer_id);
+        // The ids a receipt refers to are gone with the history; a stale "last seen"
+        // would also describe a conversation that no longer exists.
+        st.read_owed.remove(&peer_id);
+        st.last_seen.remove(&peer_id);
         Ok(())
     }
 
