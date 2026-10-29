@@ -52,11 +52,23 @@ fn messages_flow_both_ways_over_tcp() {
 
     bob.send_over_transport("alice".into(), "hi alice".into())
         .unwrap();
-    assert!(alice.receive_from_peer("bob".into()).unwrap());
+    // Bob's delivery notice for "hello bob" arrives first, then his message.
+    receive_until_history_len(&alice, "bob", 2);
     assert_eq!(
         alice.history("bob".into()).unwrap(),
         vec!["hello bob", "hi alice"]
     );
+}
+
+/// Receives frames, receipts included, until the conversation holds `len` messages.
+fn receive_until_history_len(m: &Messenger, peer: &str, len: usize) {
+    for _ in 0..40 {
+        if m.history(peer.into()).unwrap().len() >= len {
+            return;
+        }
+        m.receive_from_peer(peer.into()).unwrap();
+    }
+    panic!("conversation never reached {len} messages");
 }
 
 fn connect_with_retry(alice: &Messenger, addr: &str) {

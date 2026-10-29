@@ -14,19 +14,21 @@
 
 use std::collections::HashMap;
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::apk_transfer;
 use crate::double_ratchet::{DoubleRatchet, Header, Message};
+use crate::envelope::{self, Envelope};
 use crate::error::CoreError;
 use crate::handshake::{self, Identity, IdentityPublic, CHALLENGE_LEN};
 use crate::onion;
 use crate::pairing;
 use crate::secret::{Key32, SecretBytes};
-use crate::store::Store;
+use crate::store::{Delivery, Store};
 use crate::transport::{TcpTransport, Transport};
 use crate::update;
 use crate::vault;
@@ -72,6 +74,41 @@ pub struct WireMessage {
     /// Position of this message in the sending chain.
     pub counter: u64,
     pub ciphertext: Vec<u8>,
+}
+
+/// Where one chat message stands. Incoming messages are always `Received`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum MessageState {
+    /// Queued on this phone until the contact is reachable.
+    Pending,
+    /// Handed to the link.
+    Sent,
+    /// The contact's phone confirmed receipt.
+    Delivered,
+    /// The contact opened the chat after it arrived.
+    Read,
+    /// Came from the contact.
+    Received,
+}
+
+/// One message for display. `at_ms` is this phone's clock (Unix milliseconds): when it
+/// was sent or queued here, or when it arrived. The contact's clock is never used.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct ChatMessage {
+    pub id: u64,
+    pub outgoing: bool,
+    pub at_ms: u64,
+    pub state: MessageState,
+    pub text: String,
+}
+
+/// Whether a contact's link is up now, and when it last was. Both come from this
+/// phone's own view of the connection; nothing extra is sent to learn them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct Presence {
+    pub online: bool,
+    /// Unix milliseconds on this phone's clock, or `None` if never connected this run.
+    pub last_seen_ms: Option<u64>,
 }
 
 /// An update whose signature has checked out. Only this type reaches the install step.
@@ -173,6 +210,9 @@ struct Session {
     ratchet: Mutex<DoubleRatchet>,
     /// `None` for an in-process session with no network connection.
     link: Option<Arc<dyn Transport>>,
+    /// Set when a send or receive on the link failed. A dead link reads as not connected
+    /// until a new handshake replaces the session.
+    dead: AtomicBool,
 }
 
 struct State {
@@ -190,6 +230,10 @@ struct State {
     /// The challenge last issued by `responder_challenge`. Spent by the next
     /// `accept_session`, whatever its outcome, so it cannot authenticate a second handshake.
     pending_challenge: Option<[u8; CHALLENGE_LEN]>,
+    /// When each contact's link last came up, delivered something, or dropped (Unix ms).
+    last_seen: HashMap<String, u64>,
+    /// Newest message the user has read whose read receipt is not yet sent, per contact.
+    read_owed: HashMap<String, u64>,
     /// Key that seals the identity vault. `None` for a `new()` messenger, which
     /// has no vault. Zeroized on drop.
     data_key: Option<Key32>,
@@ -477,8 +521,12 @@ impl Messenger {
     /// `send_over_transport` is the path that transmits.
     pub fn send(&self, peer_id: String, text: String) -> Result<WireMessage, FacadeError> {
         let session = self.session(&peer_id)?;
-        let sealed = lock_ratchet(&session.ratchet)?.seal(text.as_bytes())?;
-        self.lock()?.store.push(&peer_id, text.as_bytes());
+        let id = random_id();
+        let plain = envelope::encode_text(id, text.as_bytes());
+        let sealed = lock_ratchet(&session.ratchet)?.seal(&plain)?;
+        self.lock()?
+            .store
+            .push_outgoing(&peer_id, id, now_ms(), Delivery::Sent, text.as_bytes());
         Ok(wire_from_message(sealed))
     }
 
@@ -491,12 +539,12 @@ impl Messenger {
             pn: msg.previous_count,
             n: msg.counter,
         };
-        let mut plaintext = lock_ratchet(&session.ratchet)?.open(&Message {
+        let plaintext = lock_ratchet(&session.ratchet)?.open(&Message {
             header,
             ciphertext: msg.ciphertext,
         })?;
-        self.lock()?.store.push(&peer_id, &plaintext);
-        plaintext.zeroize();
+        let plaintext = Zeroizing::new(plaintext);
+        self.apply_opened(&peer_id, &plaintext)?;
         Ok(())
     }
 
@@ -592,7 +640,7 @@ impl Messenger {
                 seed.copy_from_slice(st.identity.onion_seed());
                 let started =
                     TorNode::start(std::path::Path::new(&state_dir), &seed, st.public.onion);
-                seed.zeroize();
+                zeroize::Zeroize::zeroize(&mut seed);
                 st.tor = Some(started.map_err(|_| FacadeError::Network)?);
                 old
             };
@@ -715,7 +763,7 @@ impl Messenger {
         let mut peers: Vec<String> = st
             .sessions
             .iter()
-            .filter(|(_, session)| session.link.is_some())
+            .filter(|(_, session)| live_link(session).is_some())
             .map(|(peer, _)| peer.clone())
             .collect();
         peers.sort();
@@ -727,36 +775,164 @@ impl Messenger {
         Ok(self.lock()?.listening.clone())
     }
 
-    /// Seals `text` and sends it over the peer's open connection. Records it
-    /// locally only after the frame has been handed to the socket.
+    /// Seals `text` and sends it over the peer's open connection, or fails with `NoLink`.
+    /// Records it locally only after the frame has been handed to the socket. The app
+    /// uses `send_text`, which queues instead of failing.
     pub fn send_over_transport(&self, peer_id: String, text: String) -> Result<(), FacadeError> {
         let session = self.session(&peer_id)?;
-        let link = session.link.clone().ok_or(FacadeError::NoLink)?;
-        {
-            let mut ratchet = lock_ratchet(&session.ratchet)?;
-            wire::send_message(link.as_ref(), &mut ratchet, text.as_bytes())?;
-        }
-        self.lock()?.store.push(&peer_id, text.as_bytes());
+        let link = live_link(&session).ok_or(FacadeError::NoLink)?;
+        let id = random_id();
+        let plain = envelope::encode_text(id, text.as_bytes());
+        self.send_sealed(&session, &link, &plain)?;
+        self.lock()?
+            .store
+            .push_outgoing(&peer_id, id, now_ms(), Delivery::Sent, text.as_bytes());
         Ok(())
     }
 
-    /// Waits for one message from the peer over its open connection. Returns
-    /// `Ok(false)` if nothing arrived within the poll interval, so the caller can
-    /// stop its loop; `Ok(true)` when a message was opened and stored.
+    /// Queues `text` for the contact and sends it now if the link is up. If it is not, the
+    /// message stays `Pending` in RAM and goes out in order when `flush_pending` finds a
+    /// link. Returns the message id. `NotPinned` for an unknown contact.
+    pub fn send_text(&self, peer_id: String, text: String) -> Result<u64, FacadeError> {
+        let id = random_id();
+        {
+            let mut st = self.lock()?;
+            if !st.pins.contains_key(&peer_id) {
+                return Err(FacadeError::NotPinned);
+            }
+            st.store
+                .push_outgoing(&peer_id, id, now_ms(), Delivery::Pending, text.as_bytes());
+        }
+        // A failed send leaves the message queued; the caller sees it as `Pending`.
+        let _ = self.flush_pending(peer_id);
+        Ok(id)
+    }
+
+    /// Sends queued messages in order, then any read receipt still owed. Returns how many
+    /// messages went out. Returns 0, and keeps everything queued, when there is no live link.
+    /// Safe to call often and from several places: the session's send lock serialises it.
+    pub fn flush_pending(&self, peer_id: String) -> Result<u32, FacadeError> {
+        let session = match self.session(&peer_id) {
+            Ok(s) => s,
+            Err(FacadeError::NoSession) => return Ok(0),
+            Err(e) => return Err(e),
+        };
+        let Some(link) = live_link(&session) else {
+            return Ok(0);
+        };
+        let mut ratchet = lock_ratchet(&session.ratchet)?;
+        let mut sent = 0;
+        loop {
+            let next = {
+                let st = self.lock()?;
+                st.store.pending_ids(&peer_id).first().and_then(|&id| {
+                    st.store
+                        .text_of_outgoing(&peer_id, id)
+                        .map(|text| (id, envelope::encode_text(id, text)))
+                })
+            };
+            let Some((id, plain)) = next else { break };
+            self.send_on(&session, &link, &mut ratchet, &plain)?;
+            self.lock()?.store.advance(&peer_id, id, Delivery::Sent);
+            sent += 1;
+        }
+        let owed = self.lock()?.read_owed.get(&peer_id).copied();
+        if let Some(id) = owed {
+            self.send_on(&session, &link, &mut ratchet, &envelope::encode_read(id))?;
+            self.lock()?.read_owed.remove(&peer_id);
+        }
+        Ok(sent)
+    }
+
+    /// Waits for one frame from the peer over its open connection. Returns `Ok(false)` if
+    /// nothing arrived within the poll interval, so the caller can stop its loop; `Ok(true)`
+    /// when a frame was opened and applied: a message is stored (and acknowledged to the
+    /// contact), or a receipt moves one of ours to delivered or read.
     pub fn receive_from_peer(&self, peer_id: String) -> Result<bool, FacadeError> {
         let session = self.session(&peer_id)?;
-        let link = session.link.clone().ok_or(FacadeError::NoLink)?;
+        let link = live_link(&session).ok_or(FacadeError::NoLink)?;
         // The socket wait happens without the ratchet lock, so a send is not stalled.
-        let Some(frame) = wire::receive_frame(link.as_ref())? else {
-            return Ok(false);
+        let frame = match wire::receive_frame(link.as_ref()) {
+            Ok(Some(frame)) => frame,
+            Ok(None) => return Ok(false),
+            Err(e) => {
+                self.mark_dead(&peer_id, &session);
+                return Err(e.into());
+            }
         };
-        let mut plaintext = {
+        let plaintext = {
             let mut ratchet = lock_ratchet(&session.ratchet)?;
-            wire::open_frame(&mut ratchet, &frame)?
+            Zeroizing::new(wire::open_frame(&mut ratchet, &frame)?)
         };
-        self.lock()?.store.push(&peer_id, &plaintext);
-        plaintext.zeroize();
+        self.lock()?.last_seen.insert(peer_id.clone(), now_ms());
+        if let Some(id) = self.apply_opened(&peer_id, &plaintext)? {
+            // Best effort: if this fails the message is still stored, and the contact
+            // sees it as sent rather than delivered.
+            let _ = self.send_sealed(&session, &link, &envelope::encode_delivered(id));
+        }
         Ok(true)
+    }
+
+    /// Marks everything the contact sent as seen, because the user is looking at the chat.
+    /// With `send_receipt` set, the contact is told the newest message was read; if the link
+    /// is down that receipt waits and goes out with the next `flush_pending`. Returns how
+    /// many messages were newly seen.
+    pub fn mark_read(&self, peer_id: String, send_receipt: bool) -> Result<u32, FacadeError> {
+        let (count, newest) = self.lock()?.store.mark_seen(&peer_id);
+        if send_receipt && count > 0 {
+            if let Some(id) = newest {
+                self.lock()?.read_owed.insert(peer_id.clone(), id);
+                let _ = self.flush_pending(peer_id);
+            }
+        }
+        Ok(count as u32)
+    }
+
+    /// Messages from the contact the user has not seen yet.
+    pub fn unread_count(&self, peer_id: String) -> Result<u32, FacadeError> {
+        Ok(self.lock()?.store.unread(&peer_id) as u32)
+    }
+
+    /// The conversation for display, oldest first.
+    pub fn conversation(&self, peer_id: String) -> Result<Vec<ChatMessage>, FacadeError> {
+        let st = self.lock()?;
+        Ok(st
+            .store
+            .records(&peer_id)
+            .iter()
+            .map(|r| ChatMessage {
+                id: r.id,
+                outgoing: r.outgoing,
+                at_ms: r.at_ms,
+                state: match (r.outgoing, r.delivery) {
+                    (false, _) => MessageState::Received,
+                    (true, Delivery::Pending) => MessageState::Pending,
+                    (true, Delivery::Sent) => MessageState::Sent,
+                    (true, Delivery::Delivered) => MessageState::Delivered,
+                    (true, Delivery::Read) => MessageState::Read,
+                },
+                text: String::from_utf8_lossy(r.text()).into_owned(),
+            })
+            .collect())
+    }
+
+    /// Whether the contact's link is up, and when it last was. Learned from the connection
+    /// itself, so it adds nothing to the wire and reveals nothing the link did not already.
+    pub fn presence(&self, peer_id: String) -> Result<Presence, FacadeError> {
+        let st = self.lock()?;
+        let online = st
+            .sessions
+            .get(&peer_id)
+            .is_some_and(|s| live_link(s).is_some());
+        let last_seen_ms = if online {
+            Some(now_ms())
+        } else {
+            st.last_seen.get(&peer_id).copied()
+        };
+        Ok(Presence {
+            online,
+            last_seen_ms,
+        })
     }
 
     /// Plaintext history for display, oldest first. Each string is a copy that
@@ -794,6 +970,8 @@ impl Messenger {
         let mut st = self.lock()?;
         st.store.wipe_all();
         st.sessions.clear();
+        st.last_seen.clear();
+        st.read_owed.clear();
         Ok(())
     }
 
@@ -905,11 +1083,73 @@ impl Messenger {
                 store: Store::new(),
                 listening: None,
                 pending_challenge: None,
+                last_seen: HashMap::new(),
+                read_owed: HashMap::new(),
                 data_key,
                 #[cfg(feature = "tor")]
                 tor: None,
             }),
         })
+    }
+
+    /// Seals `plain` and sends it, taking the session's send lock for the one call.
+    fn send_sealed(
+        &self,
+        session: &Session,
+        link: &Arc<dyn Transport>,
+        plain: &[u8],
+    ) -> Result<(), FacadeError> {
+        let mut ratchet = lock_ratchet(&session.ratchet)?;
+        self.send_on(session, link, &mut ratchet, plain)
+    }
+
+    /// Like `send_sealed` for a caller already holding the send lock. A failed send marks
+    /// the link dead, so the app sees it as disconnected and redials.
+    fn send_on(
+        &self,
+        session: &Session,
+        link: &Arc<dyn Transport>,
+        ratchet: &mut DoubleRatchet,
+        plain: &[u8],
+    ) -> Result<(), FacadeError> {
+        wire::send_message(link.as_ref(), ratchet, plain).map_err(|e| {
+            if e == CoreError::Network {
+                session.dead.store(true, Ordering::Relaxed);
+            }
+            FacadeError::from(e)
+        })
+    }
+
+    /// Marks the session's link dead and records when the contact was last seen.
+    fn mark_dead(&self, peer_id: &str, session: &Session) {
+        session.dead.store(true, Ordering::Relaxed);
+        if let Ok(mut st) = self.lock() {
+            st.last_seen.insert(peer_id.to_owned(), now_ms());
+        }
+    }
+
+    /// Applies one opened envelope. A new text is stored and its id returned so the caller
+    /// can acknowledge it; a repeated id is stored once and not acknowledged again.
+    fn apply_opened(&self, peer_id: &str, plaintext: &[u8]) -> Result<Option<u64>, FacadeError> {
+        match envelope::decode(plaintext)? {
+            Envelope::Text { id, body } => {
+                let fresh = self
+                    .lock()?
+                    .store
+                    .push_incoming(peer_id, id, now_ms(), body);
+                Ok(fresh.then_some(id))
+            }
+            Envelope::Delivered(id) => {
+                self.lock()?.store.advance(peer_id, id, Delivery::Delivered);
+                Ok(None)
+            }
+            Envelope::Read(id) => {
+                let mut st = self.lock()?;
+                st.store.advance(peer_id, id, Delivery::Delivered);
+                st.store.mark_read_through(peer_id, id);
+                Ok(None)
+            }
+        }
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, State>, FacadeError> {
@@ -964,7 +1204,9 @@ impl Messenger {
             RESPONDER_TO_INITIATOR,
             Some(link),
         );
-        self.lock()?.sessions.insert(peer_id, Arc::new(session));
+        let mut st = self.lock()?;
+        st.last_seen.insert(peer_id.clone(), now_ms());
+        st.sessions.insert(peer_id, Arc::new(session));
         Ok(())
     }
 
@@ -1001,6 +1243,7 @@ impl Messenger {
             INITIATOR_TO_RESPONDER,
             Some(link),
         );
+        st.last_seen.insert(peer_id.clone(), now_ms());
         st.sessions.insert(peer_id.clone(), Arc::new(session));
         Ok(peer_id)
     }
@@ -1021,6 +1264,28 @@ fn pin_or_check(st: &mut State, peer_id: &str, peer: &IdentityPublic) -> Result<
 /// Whether the session's link is carried over Tor.
 fn runs_over_tor(session: &Session) -> bool {
     session.link.as_ref().is_some_and(|link| link.is_onion())
+}
+
+/// The session's link, unless it has none or has failed.
+fn live_link(session: &Session) -> Option<Arc<dyn Transport>> {
+    session
+        .link
+        .as_ref()
+        .filter(|_| !session.dead.load(Ordering::Relaxed))
+        .cloned()
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// A random message id. Only unique within one conversation direction.
+fn random_id() -> u64 {
+    let mut b = [0u8; 8];
+    getrandom::fill(&mut b).expect("OS randomness unavailable");
+    u64::from_be_bytes(b)
 }
 
 fn lock_ratchet(
@@ -1047,6 +1312,7 @@ fn session_for(
     Session {
         ratchet: Mutex::new(DoubleRatchet::new(root, send_label, recv_label)),
         link,
+        dead: AtomicBool::new(false),
     }
 }
 

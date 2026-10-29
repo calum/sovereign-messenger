@@ -1,114 +1,218 @@
 package org.sovereign.mesh.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import org.sovereign.mesh.SovereignApp
+import org.sovereign.mesh.core.deliveryDescription
+import org.sovereign.mesh.core.deliveryMark
+import org.sovereign.mesh.core.listTime
+import org.sovereign.mesh.core.presenceText
+import org.sovereign.mesh.core.previewText
+import org.sovereign.mesh.core.torIsReady
 import org.sovereign.mesh.core.torStatusText
+import uniffi.rust_core.TorState
 
 @Composable
-fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: () -> Unit) {
-    val peers = SovereignApp.core.peers()
-    var confirmDelete by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onSettings: () -> Unit) {
+    val contacts by rememberContacts()
+    val now by rememberNow()
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(chatListTitle, style = MaterialTheme.typography.titleLarge)
-        }
-        P2pMeshIndicator(peer = null, modifier = Modifier.padding(top = 4.dp))
-        SovereignApp.tor.snapshot.let {
-            Text(
-                torStatusText(it.state, it.percent),
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.padding(top = 2.dp),
+    Scaffold(
+        topBar = {
+            ScreenBar(
+                onBack = null,
+                title = { BarTitle(chatListTitle) },
+                actions = { OverflowMenu(listOf("Settings" to onSettings)) },
             )
-        }
-        Button(onClick = onPair, modifier = Modifier.padding(top = 8.dp)) {
-            Text("Pair a contact")
-        }
-        OutlinedButton(onClick = onUpdate, modifier = Modifier.padding(top = 8.dp)) {
-            Text("Updates")
-        }
-        identityNotice(SovereignApp.identityUnreadable, SovereignApp.core.saveFailed)?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 12.dp))
-        }
-        OutlinedButton(onClick = { confirmDelete = true }, modifier = Modifier.padding(top = 8.dp)) {
-            Text("Delete my identity")
-        }
-
-        if (confirmDelete) {
-            DeleteIdentityDialog(
-                onConfirm = {
-                    confirmDelete = false
-                    // Stopping Tor and deleting its folder can take a moment: not on the UI thread.
-                    scope.launch(Dispatchers.IO) { SovereignApp.deleteIdentity() }
-                },
-                onDismiss = { confirmDelete = false },
+        },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = onPair,
+                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                text = { Text("Add contact") },
             )
-        }
-
-        if (peers.isEmpty()) {
-            Text(
-                "No chats yet. Meet a friend in person and scan their QR code to start.",
-                modifier = Modifier.padding(top = 24.dp),
-            )
-        } else {
-            LazyColumn {
-                items(peers) { peer ->
+        },
+    ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            TorBanner()
+            identityNotice(SovereignApp.identityUnreadable, SovereignApp.core.saveFailed)?.let {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                ) {
                     Text(
-                        peer,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onOpenChat(peer) }
-                            .padding(vertical = 16.dp),
+                        it,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(12.dp),
                     )
+                }
+            }
+            val rows = contacts
+            when {
+                rows == null -> Unit
+                rows.isEmpty() -> EmptyContacts(onPair)
+                else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(rows, key = { it.name }) { row ->
+                        ContactItem(row, now, onClick = { onOpenChat(row.name) })
+                        HorizontalDivider(modifier = Modifier.padding(start = 76.dp))
+                    }
+                    // Keeps the last row clear of the add button.
+                    item { Box(modifier = Modifier.size(88.dp)) }
                 }
             }
         }
     }
 }
 
-/** Confirms before the stored identity and every contact pin are destroyed. */
+/** Shown only while Tor is not up, so a quiet chat list is not mistaken for a broken one. */
 @Composable
-private fun DeleteIdentityDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Delete your identity?") },
-        text = { Text(deleteIdentityWarning) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Delete") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+private fun TorBanner() {
+    val tor = SovereignApp.tor.snapshot
+    if (torIsReady(tor.state) || tor.state == TorState.NOT_BUILT) return
+    Surface(color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (tor.state != TorState.FAILED && tor.state != TorState.STOPPED) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            }
+            Text(
+                torStatusText(tor.state, tor.percent),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyContacts(onPair: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("No contacts yet", style = MaterialTheme.typography.titleLarge)
+        Text(
+            emptyContactsHelp,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
+        )
+        Button(onClick = onPair) { Text("Add your first contact") }
+    }
+}
+
+@Composable
+private fun ContactItem(row: ContactRow, nowMs: Long, onClick: () -> Unit) {
+    val online = row.presence.online
+    val last = row.last
+    val line = last?.let(::previewText)
+        ?: presenceText(online, row.presence.lastSeenMs?.toLong(), nowMs)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Avatar(row.name, online)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                row.name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = if (row.unread > 0) FontWeight.Bold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                line,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = if (row.unread > 0) FontWeight.Bold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (last != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (last.outgoing) {
+                        Text(
+                            deliveryMark(last.state),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.semantics { contentDescription = deliveryDescription(last.state) },
+                        )
+                    }
+                    Text(
+                        listTime(last.atMs.toLong(), nowMs),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (row.unread > 0) UnreadBadge(row.unread)
+        }
+    }
+}
+
+@Composable
+private fun UnreadBadge(count: Int) {
+    Surface(color = MaterialTheme.colorScheme.primary, shape = CircleShape) {
+        Text(
+            if (count > 99) "99+" else count.toString(),
+            color = MaterialTheme.colorScheme.onPrimary,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier
+                .padding(horizontal = 7.dp, vertical = 2.dp)
+                .semantics { contentDescription = "$count unread" },
+        )
+    }
 }
 
 /** The chat list title. It must not say "secured" until the app can back that claim (CLAUDE.md rule 7). */
 internal const val chatListTitle = "P2P Mesh"
+
+/** Shown when nobody is paired yet. It says what to do first, and that pairing happens in person. */
+internal const val emptyContactsHelp =
+    "Meet a friend in person and scan each other's QR codes. " +
+        "You only do this once; after that you can message them whenever you are both online."
 
 /** What the user is told before a delete. It names the cost; there is no recovery. */
 internal const val deleteIdentityWarning =

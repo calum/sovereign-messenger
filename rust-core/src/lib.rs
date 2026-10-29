@@ -5,6 +5,7 @@
 
 pub mod apk_transfer;
 pub mod double_ratchet;
+pub mod envelope;
 pub mod error;
 pub mod ffi;
 pub mod handshake;

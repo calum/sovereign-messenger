@@ -1,9 +1,11 @@
 package org.sovereign.mesh.core
 
+import uniffi.rust_core.ChatMessage
 import uniffi.rust_core.FacadeException
 import uniffi.rust_core.LockReport
 import uniffi.rust_core.Messenger
 import uniffi.rust_core.PairingAssembler
+import uniffi.rust_core.Presence
 import uniffi.rust_core.TorRole
 import uniffi.rust_core.TorStatus
 
@@ -47,6 +49,39 @@ class CoreBridge(
         messenger.sendOverTransport(peer, text)
     }
 
+    /**
+     * Queues [text] for [peer] and sends it now if the link is up; otherwise it waits in RAM
+     * and goes out when the link returns. Blocking, so call it off the UI thread.
+     */
+    fun sendText(peer: String, text: String) {
+        messenger.sendText(peer, text)
+    }
+
+    /** Sends any queued messages and owed read receipt. Returns how many messages went out. Blocking. */
+    fun flushPending(peer: String): Int = messenger.flushPending(peer).toInt()
+
+    /** The conversation with [peer], oldest first, each message with its sender side, time and state. */
+    fun conversation(peer: String): List<ChatMessage> = messenger.conversation(peer)
+
+    /** Messages from [peer] that the user has not seen yet. */
+    fun unreadCount(peer: String): Int = messenger.unreadCount(peer).toInt()
+
+    /**
+     * The user is looking at the chat: marks everything seen. With [sendReceipt], [peer] is told
+     * the newest message was read. Returns how many messages were newly seen. Blocking.
+     */
+    fun markRead(peer: String, sendReceipt: Boolean): Int = messenger.markRead(peer, sendReceipt).toInt()
+
+    /** Whether [peer]'s link is up, and when it last was. Read from this phone's own connection. */
+    fun presence(peer: String): Presence = messenger.presence(peer)
+
+    /** Removes the contact: ends the session, drops the messages and the pin. They must be paired again. */
+    fun removeContact(peer: String) {
+        messenger.forget(peer)
+        messenger.unpin(peer)
+        persist()
+    }
+
     /** Dials [addr] (`host:port`) and runs the handshake with the pinned identity of [peer]. Blocking. */
     fun connect(peer: String, addr: String) {
         messenger.connectPeer(peer, addr)
@@ -69,7 +104,7 @@ class CoreBridge(
         messenger.forget(peer)
     }
 
-    /** Called on activity stop. Wipes sessions and history in rust-core. */
+    /** Wipes sessions and history in rust-core. Nothing calls it on a normal stop: chats stay in RAM until the process ends. */
     fun wipeAll() {
         messenger.wipeAll()
     }

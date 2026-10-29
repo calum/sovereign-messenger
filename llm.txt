@@ -22,11 +22,12 @@ COMPONENTS
   - apk_transfer.rs  APK transfer over local Wi-Fi
   - scripts/      build-android.sh (NDK cross-compile), gen-kotlin.sh (bindings)
 - app/           Android app, Kotlin + Jetpack Compose, minSdk 29, targetSdk 35, package org.sovereign.mesh
-  - MainActivity: FLAG_SECURE, wipes core on stop
+  - MainActivity: FLAG_SECURE, system back stack (core/Navigation), no wipe on stop (chats stay in RAM while the process lives)
   - core/CoreBridge: forwards to generated UniFFI bindings (uniffi/rust_core); connect, listen, send, receive over TCP, plus Tor calls
   - core/IdentityVault, AndroidKeystoreWrapper: store the sealed identity; the Keystore wraps the data key
   - core/TorController, TorUi: start Tor, show its status, accept calls, decide when to dial
-  - ui/: TourScreen, ChatListScreen, ChatScreen (connect or wait for contact, send, receive loop)
+  - core/PeerConnections: app-wide per-contact receive, redial and queue-flush loops; ChatFormat: pure text and grouping rules
+  - ui/: TourScreen, ChatListScreen, ChatScreen (bubbles, receipts, queued send), PairingScreen (4 steps), SettingsScreen, WifiTestDialog
 
 WORKS TODAY
 - 207 Rust tests pass (mise run rust:test), 239 with the Tor feature (mise run rust:test:tor); 3 live Tor tests are ignored by default (mise run rust:live)

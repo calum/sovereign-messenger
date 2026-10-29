@@ -59,6 +59,8 @@ class TransportLoopbackTest {
         assertEquals(listOf("hello bob"), bob.history("alice"))
 
         bob.send("alice", "hi alice")
+        // Bob's delivery notice for "hello bob" comes first, then his message.
+        assertTrue(alice.receiveOnce("bob"))
         assertTrue(alice.receiveOnce("bob"))
         assertEquals(listOf("hello bob", "hi alice"), alice.history("bob"))
     }

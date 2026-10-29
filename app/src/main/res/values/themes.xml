@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.SovereignMesh" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Follows the phone's light or dark setting so the window never flashes the wrong colour at start. -->
+    <style name="Theme.SovereignMesh" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+    </style>
 </resources>

@@ -683,11 +683,15 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_connect_peer_tor(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_conversation(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_data_key(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_developer_key_fingerprint(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_export_vault(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_flush_pending(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_forget(
     ): Int
@@ -702,6 +706,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_rust_core_checksum_method_messenger_listening_peer(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_lock_report(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_mark_read(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_own_fingerprint(
     ): Int
@@ -721,6 +727,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_pinned_peers(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_presence(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_receive(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_receive_from_peer(
@@ -735,6 +743,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_send_over_transport(
     ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_send_text(
+    ): Int
     external fun uniffi_rust_core_checksum_method_messenger_send_update(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_start_session(
@@ -748,6 +758,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_rust_core_checksum_method_messenger_tor_stop(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_unpin(
+    ): Int
+    external fun uniffi_rust_core_checksum_method_messenger_unread_count(
     ): Int
     external fun uniffi_rust_core_checksum_method_messenger_verify_update(
     ): Int
@@ -805,12 +817,16 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_connect_peer_tor(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_conversation(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_data_key(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_developer_key_fingerprint(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_export_vault(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_flush_pending(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
     external fun uniffi_rust_core_fn_method_messenger_forget(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_history(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -825,6 +841,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_lock_report(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_mark_read(`ptr`: Long,`peerId`: RustBuffer.ByValue,`sendReceipt`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
     external fun uniffi_rust_core_fn_method_messenger_own_fingerprint(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_own_identity(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -843,6 +861,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_pinned_peers(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_rust_core_fn_method_messenger_presence(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_receive(`ptr`: Long,`peerId`: RustBuffer.ByValue,`msg`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_receive_from_peer(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -857,6 +877,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_rust_core_fn_method_messenger_send_over_transport(`ptr`: Long,`peerId`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_send_text(`ptr`: Long,`peerId`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     external fun uniffi_rust_core_fn_method_messenger_send_update(`ptr`: Long,`addr`: RustBuffer.ByValue,`timeoutSecs`: Int,`apk`: RustBuffer.ByValue,`version`: Long,`signature`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_start_session(`ptr`: Long,`peerId`: RustBuffer.ByValue,`peer`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -871,6 +893,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_unpin(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_rust_core_fn_method_messenger_unread_count(`ptr`: Long,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Int
     external fun uniffi_rust_core_fn_method_messenger_verify_update(`ptr`: Long,`apk`: RustBuffer.ByValue,`version`: Long,`signature`: RustBuffer.ByValue,`installedVersion`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_rust_core_fn_method_messenger_wipe_all(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1018,6 +1042,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_connect_peer_tor() and 0xFFFF) != 24844) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_conversation() and 0xFFFF) != 23852) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_method_messenger_data_key() and 0xFFFF) != 64194) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1025,6 +1052,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_export_vault() and 0xFFFF) != 36389) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_flush_pending() and 0xFFFF) != 50894) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_forget() and 0xFFFF) != 56790) {
@@ -1046,6 +1076,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_lock_report() and 0xFFFF) != 17259) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_mark_read() and 0xFFFF) != 26144) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_own_fingerprint() and 0xFFFF) != 1151) {
@@ -1075,10 +1108,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_pinned_peers() and 0xFFFF) != 23966) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_presence() and 0xFFFF) != 42954) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_rust_core_checksum_method_messenger_receive() and 0xFFFF) != 39308) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_rust_core_checksum_method_messenger_receive_from_peer() and 0xFFFF) != 17368) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_receive_from_peer() and 0xFFFF) != 44277) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_receive_update() and 0xFFFF) != 59755) {
@@ -1093,7 +1129,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_send() and 0xFFFF) != 51341) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_rust_core_checksum_method_messenger_send_over_transport() and 0xFFFF) != 17166) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_send_over_transport() and 0xFFFF) != 37717) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_send_text() and 0xFFFF) != 10103) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_send_update() and 0xFFFF) != 43295) {
@@ -1111,10 +1150,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_rust_core_checksum_method_messenger_tor_status() and 0xFFFF) != 31414) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_rust_core_checksum_method_messenger_tor_stop() and 0xFFFF) != 1821) {
+    if ((lib.uniffi_rust_core_checksum_method_messenger_tor_stop() and 0xFFFF) != 19515) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_unpin() and 0xFFFF) != 28018) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_rust_core_checksum_method_messenger_unread_count() and 0xFFFF) != 4795) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_rust_core_checksum_method_messenger_verify_update() and 0xFFFF) != 53274) {
@@ -1605,6 +1647,11 @@ public interface MessengerInterface {
     fun `connectPeerTor`(`peerId`: kotlin.String)
     
     /**
+     * The conversation for display, oldest first.
+     */
+    fun `conversation`(`peerId`: kotlin.String): List<ChatMessage>
+    
+    /**
      * The vault key, handed out once so Kotlin can wrap it with the Keystore.
      * `Internal` for a messenger made with `new()`, which has no vault.
      */
@@ -1622,6 +1669,13 @@ public interface MessengerInterface {
      * and write the result to app-private storage excluded from backup.
      */
     fun `exportVault`(): kotlin.ByteArray
+    
+    /**
+     * Sends queued messages in order, then any read receipt still owed. Returns how many
+     * messages went out. Returns 0, and keeps everything queued, when there is no live link.
+     * Safe to call often and from several places: the session's send lock serialises it.
+     */
+    fun `flushPending`(`peerId`: kotlin.String): kotlin.UInt
     
     /**
      * Ends one conversation and its ratchet state. The pin stays (see `unpin`).
@@ -1664,6 +1718,14 @@ public interface MessengerInterface {
      * swapping unlocked pages, so the app needs this to tell the user.
      */
     fun `lockReport`(): LockReport
+    
+    /**
+     * Marks everything the contact sent as seen, because the user is looking at the chat.
+     * With `send_receipt` set, the contact is told the newest message was read; if the link
+     * is down that receipt waits and goes out with the next `flush_pending`. Returns how
+     * many messages were newly seen.
+     */
+    fun `markRead`(`peerId`: kotlin.String, `sendReceipt`: kotlin.Boolean): kotlin.UInt
     
     /**
      * Fingerprint of this identity, shown so the two users can compare it in person.
@@ -1710,15 +1772,22 @@ public interface MessengerInterface {
     fun `pinnedPeers`(): List<kotlin.String>
     
     /**
+     * Whether the contact's link is up, and when it last was. Learned from the connection
+     * itself, so it adds nothing to the wire and reveals nothing the link did not already.
+     */
+    fun `presence`(`peerId`: kotlin.String): Presence
+    
+    /**
      * Opens a message from the peer without a network receive. A tampered,
      * replayed or out-of-order message is rejected and leaves the chain where it was.
      */
     fun `receive`(`peerId`: kotlin.String, `msg`: WireMessage)
     
     /**
-     * Waits for one message from the peer over its open connection. Returns
-     * `Ok(false)` if nothing arrived within the poll interval, so the caller can
-     * stop its loop; `Ok(true)` when a message was opened and stored.
+     * Waits for one frame from the peer over its open connection. Returns `Ok(false)` if
+     * nothing arrived within the poll interval, so the caller can stop its loop; `Ok(true)`
+     * when a frame was opened and applied: a message is stored (and acknowledged to the
+     * contact), or a receipt moves one of ours to delivered or read.
      */
     fun `receiveFromPeer`(`peerId`: kotlin.String): kotlin.Boolean
     
@@ -1751,10 +1820,18 @@ public interface MessengerInterface {
     fun `send`(`peerId`: kotlin.String, `text`: kotlin.String): WireMessage
     
     /**
-     * Seals `text` and sends it over the peer's open connection. Records it
-     * locally only after the frame has been handed to the socket.
+     * Seals `text` and sends it over the peer's open connection, or fails with `NoLink`.
+     * Records it locally only after the frame has been handed to the socket. The app
+     * uses `send_text`, which queues instead of failing.
      */
     fun `sendOverTransport`(`peerId`: kotlin.String, `text`: kotlin.String)
+    
+    /**
+     * Queues `text` for the contact and sends it now if the link is up. If it is not, the
+     * message stays `Pending` in RAM and goes out in order when `flush_pending` finds a
+     * link. Returns the message id. `NotPinned` for an unknown contact.
+     */
+    fun `sendText`(`peerId`: kotlin.String, `text`: kotlin.String): kotlin.ULong
     
     /**
      * Dials `addr` (the receiver's update port, 47002) and forwards one bundle:
@@ -1795,7 +1872,9 @@ public interface MessengerInterface {
     fun `torStatus`(): TorStatus
     
     /**
-     * Stops Tor and the onion service. Open Tor links close with it. Harmless if not started.
+     * Stops Tor and the onion service, and ends every session that ran over Tor: a session
+     * whose carrier is gone must not linger as if it were connected. Sessions on other
+     * carriers are untouched. Harmless if Tor was not started.
      */
     fun `torStop`()
     
@@ -1804,6 +1883,11 @@ public interface MessengerInterface {
      * and any session for `peer_id`; the next scan or handshake pins again.
      */
     fun `unpin`(`peerId`: kotlin.String)
+    
+    /**
+     * Messages from the contact the user has not seen yet.
+     */
+    fun `unreadCount`(`peerId`: kotlin.String): kotlin.UInt
     
     /**
      * Checks an APK's detached Ed25519 signature over `version` and `apk`, against the
@@ -2023,6 +2107,24 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
+     * The conversation for display, oldest first.
+     */
+    @Throws(FacadeException::class)override fun `conversation`(`peerId`: kotlin.String): List<ChatMessage> {
+            return FfiConverterSequenceTypeChatMessage.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_conversation(
+        it,
+        
+        FfiConverterString.lower(`peerId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * The vault key, handed out once so Kotlin can wrap it with the Keystore.
      * `Internal` for a messenger made with `new()`, which has no vault.
      */
@@ -2069,6 +2171,26 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     UniffiLib.uniffi_rust_core_fn_method_messenger_export_vault(
         it,
         _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Sends queued messages in order, then any read receipt still owed. Returns how many
+     * messages went out. Returns 0, and keeps everything queued, when there is no live link.
+     * Safe to call often and from several places: the session's send lock serialises it.
+     */
+    @Throws(FacadeException::class)override fun `flushPending`(`peerId`: kotlin.String): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_flush_pending(
+        it,
+        
+        FfiConverterString.lower(`peerId`),_status)
 }
     }
     )
@@ -2200,6 +2322,28 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
     UniffiLib.uniffi_rust_core_fn_method_messenger_lock_report(
         it,
         _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Marks everything the contact sent as seen, because the user is looking at the chat.
+     * With `send_receipt` set, the contact is told the newest message was read; if the link
+     * is down that receipt waits and goes out with the next `flush_pending`. Returns how
+     * many messages were newly seen.
+     */
+    @Throws(FacadeException::class)override fun `markRead`(`peerId`: kotlin.String, `sendReceipt`: kotlin.Boolean): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_mark_read(
+        it,
+        
+        FfiConverterString.lower(`peerId`),
+        FfiConverterBoolean.lower(`sendReceipt`),_status)
 }
     }
     )
@@ -2364,6 +2508,25 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
+     * Whether the contact's link is up, and when it last was. Learned from the connection
+     * itself, so it adds nothing to the wire and reveals nothing the link did not already.
+     */
+    @Throws(FacadeException::class)override fun `presence`(`peerId`: kotlin.String): Presence {
+            return FfiConverterTypePresence.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_presence(
+        it,
+        
+        FfiConverterString.lower(`peerId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Opens a message from the peer without a network receive. A tampered,
      * replayed or out-of-order message is rejected and leaves the chain where it was.
      */
@@ -2383,9 +2546,10 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
-     * Waits for one message from the peer over its open connection. Returns
-     * `Ok(false)` if nothing arrived within the poll interval, so the caller can
-     * stop its loop; `Ok(true)` when a message was opened and stored.
+     * Waits for one frame from the peer over its open connection. Returns `Ok(false)` if
+     * nothing arrived within the poll interval, so the caller can stop its loop; `Ok(true)`
+     * when a frame was opened and applied: a message is stored (and acknowledged to the
+     * contact), or a receipt moves one of ours to delivered or read.
      */
     @Throws(FacadeException::class)override fun `receiveFromPeer`(`peerId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
@@ -2486,8 +2650,9 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
-     * Seals `text` and sends it over the peer's open connection. Records it
-     * locally only after the frame has been handed to the socket.
+     * Seals `text` and sends it over the peer's open connection, or fails with `NoLink`.
+     * Records it locally only after the frame has been handed to the socket. The app
+     * uses `send_text`, which queues instead of failing.
      */
     @Throws(FacadeException::class)override fun `sendOverTransport`(`peerId`: kotlin.String, `text`: kotlin.String)
         = 
@@ -2501,6 +2666,27 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 }
     }
     
+    
+
+    
+    /**
+     * Queues `text` for the contact and sends it now if the link is up. If it is not, the
+     * message stays `Pending` in RAM and goes out in order when `flush_pending` finds a
+     * link. Returns the message id. `NotPinned` for an unknown contact.
+     */
+    @Throws(FacadeException::class)override fun `sendText`(`peerId`: kotlin.String, `text`: kotlin.String): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_send_text(
+        it,
+        
+        FfiConverterString.lower(`peerId`),
+        FfiConverterString.lower(`text`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -2611,7 +2797,9 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 
     
     /**
-     * Stops Tor and the onion service. Open Tor links close with it. Harmless if not started.
+     * Stops Tor and the onion service, and ends every session that ran over Tor: a session
+     * whose carrier is gone must not linger as if it were connected. Sessions on other
+     * carriers are untouched. Harmless if Tor was not started.
      */
     @Throws(FacadeException::class)override fun `torStop`()
         = 
@@ -2641,6 +2829,24 @@ open class Messenger: Disposable, AutoCloseable, MessengerInterface
 }
     }
     
+    
+
+    
+    /**
+     * Messages from the contact the user has not seen yet.
+     */
+    @Throws(FacadeException::class)override fun `unreadCount`(`peerId`: kotlin.String): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FacadeException) { _status ->
+    UniffiLib.uniffi_rust_core_fn_method_messenger_unread_count(
+        it,
+        
+        FfiConverterString.lower(`peerId`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -3084,6 +3290,63 @@ public object FfiConverterTypePairingAssembler: FfiConverter<PairingAssembler, L
 
 
 /**
+ * One message for display. `at_ms` is this phone's clock (Unix milliseconds): when it
+ * was sent or queued here, or when it arrived. The contact's clock is never used.
+ */
+data class ChatMessage (
+    var `id`: kotlin.ULong
+    , 
+    var `outgoing`: kotlin.Boolean
+    , 
+    var `atMs`: kotlin.ULong
+    , 
+    var `state`: MessageState
+    , 
+    var `text`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChatMessage: FfiConverterRustBuffer<ChatMessage> {
+    override fun read(buf: ByteBuffer): ChatMessage {
+        return ChatMessage(
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterTypeMessageState.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChatMessage) = (
+            FfiConverterULong.allocationSize(value.`id`) +
+            FfiConverterBoolean.allocationSize(value.`outgoing`) +
+            FfiConverterULong.allocationSize(value.`atMs`) +
+            FfiConverterTypeMessageState.allocationSize(value.`state`) +
+            FfiConverterString.allocationSize(value.`text`)
+    )
+
+    override fun write(value: ChatMessage, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`id`, buf)
+            FfiConverterBoolean.write(value.`outgoing`, buf)
+            FfiConverterULong.write(value.`atMs`, buf)
+            FfiConverterTypeMessageState.write(value.`state`, buf)
+            FfiConverterString.write(value.`text`, buf)
+    }
+}
+
+
+
+/**
  * First handshake message, sent by the initiator. Public values only.
  */
 data class HandshakeMessage (
@@ -3184,6 +3447,51 @@ public object FfiConverterTypeLockReport: FfiConverterRustBuffer<LockReport> {
             FfiConverterBoolean.write(value.`probeLocked`, buf)
             FfiConverterULong.write(value.`storedTotal`, buf)
             FfiConverterULong.write(value.`storedLocked`, buf)
+    }
+}
+
+
+
+/**
+ * Whether a contact's link is up now, and when it last was. Both come from this
+ * phone's own view of the connection; nothing extra is sent to learn them.
+ */
+data class Presence (
+    var `online`: kotlin.Boolean
+    , 
+    /**
+     * Unix milliseconds on this phone's clock, or `None` if never connected this run.
+     */
+    var `lastSeenMs`: kotlin.ULong?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePresence: FfiConverterRustBuffer<Presence> {
+    override fun read(buf: ByteBuffer): Presence {
+        return Presence(
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: Presence) = (
+            FfiConverterBoolean.allocationSize(value.`online`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastSeenMs`)
+    )
+
+    override fun write(value: Presence, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`online`, buf)
+            FfiConverterOptionalULong.write(value.`lastSeenMs`, buf)
     }
 }
 
@@ -3555,6 +3863,61 @@ public object FfiConverterTypeFacadeError : FfiConverterRustBuffer<FacadeExcepti
 
 
 /**
+ * Where one chat message stands. Incoming messages are always `Received`.
+ */
+
+enum class MessageState {
+    
+    /**
+     * Queued on this phone until the contact is reachable.
+     */
+    PENDING,
+    /**
+     * Handed to the link.
+     */
+    SENT,
+    /**
+     * The contact's phone confirmed receipt.
+     */
+    DELIVERED,
+    /**
+     * The contact opened the chat after it arrived.
+     */
+    READ,
+    /**
+     * Came from the contact.
+     */
+    RECEIVED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMessageState: FfiConverterRustBuffer<MessageState> {
+    override fun read(buf: ByteBuffer) = try {
+        MessageState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: MessageState) = 4UL
+
+    override fun write(value: MessageState, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
  * Which side of a pair dials over Tor. Fixed by the two long-term keys, so both phones
  * agree without talking: one `Dial`s and the other `Wait`s to be called.
  */
@@ -3631,6 +3994,38 @@ public object FfiConverterTypeTorState: FfiConverterRustBuffer<TorState> {
 }
 
 
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
+        }
+    }
+}
 
 
 
@@ -3748,6 +4143,34 @@ public object FfiConverterSequenceByteArray: FfiConverterRustBuffer<List<kotlin.
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterByteArray.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeChatMessage: FfiConverterRustBuffer<List<ChatMessage>> {
+    override fun read(buf: ByteBuffer): List<ChatMessage> {
+        val len = buf.getInt()
+        return List<ChatMessage>(len) {
+            FfiConverterTypeChatMessage.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ChatMessage>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeChatMessage.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ChatMessage>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeChatMessage.write(it, buf)
         }
     }
 }
