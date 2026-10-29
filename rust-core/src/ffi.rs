@@ -282,7 +282,7 @@ struct State {
     /// Lets the UI show that a listener is up without a second source of truth.
     listening: Option<String>,
     /// The challenge last issued by `responder_challenge`, with its ephemeral secret.
-    /// Spent by the next `accept_session`, whatever its outcome, so neither the challenge
+    /// Spent by the next `accept_session`, once it gets past input validation and the pin check, whatever its outcome after that, so neither the challenge
     /// nor the ephemeral key can serve a second handshake. Dropping it zeroizes the secret.
     pending_challenge: Option<handshake::Challenge>,
     /// When each contact's link last came up, delivered something, or dropped (Unix ms).
@@ -543,9 +543,11 @@ impl Messenger {
     }
 
     /// Responder side: derive the same root from the initiator's handshake message.
-    /// `challenge` must be the 64 bytes `responder_challenge` issued, and the challenge
-    /// and its ephemeral secret are spent by this call whatever the outcome. Refuses with `NotPinned` if `peer_id` has no
-    /// pin, and with `AuthFailed` if the initiator's static key is not the pinned one,
+    /// `challenge` must be the 64 bytes `responder_challenge` issued. Once the input is well
+    /// formed and `peer_id` is pinned, the challenge and its ephemeral secret are spent by
+    /// this call whatever the outcome; a call refused earlier (wrong length, malformed
+    /// fields, `NotPinned`) leaves the pending challenge for a correct retry. Refuses with
+    /// `NotPinned` if `peer_id` has no pin, and with `AuthFailed` if the initiator's static key is not the pinned one,
     /// if the challenge is not the pending one, or if the confirmation tag does not
     /// verify. No session is stored on any refusal, so a replay leaves a live session alone.
     pub fn accept_session(
