@@ -30,6 +30,14 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- Own process: it must still open when the main process is broken, and it never loads the core. -->
+        <activity
+            android:name=".CrashActivity"
+            android:exported="false"
+            android:process=":crash"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
