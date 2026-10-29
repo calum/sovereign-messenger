@@ -11,6 +11,10 @@
 //! | 0x10 | text      | kind, id (u64 BE), text     |
 //! | 0x11 | delivered | kind, id (u64 BE)           |
 //! | 0x12 | read      | kind, id (u64 BE)           |
+//! | 0x13 | ping      | kind, id (u64 BE)           |
+//!
+//! A ping is a liveness probe: the id is random and means nothing. It is never stored,
+//! shown or acknowledged. A ping of the wrong length is refused like a receipt.
 
 use zeroize::Zeroizing;
 
@@ -19,6 +23,7 @@ use crate::error::CoreError;
 const KIND_TEXT: u8 = 0x10;
 const KIND_DELIVERED: u8 = 0x11;
 const KIND_READ: u8 = 0x12;
+const KIND_PING: u8 = 0x13;
 const ID_END: usize = 1 + 8;
 
 /// One decoded envelope. A text body borrows from the opened plaintext.
@@ -32,6 +37,8 @@ pub enum Envelope<'a> {
     Delivered(u64),
     /// The contact has seen message `id` and every earlier one from this phone.
     Read(u64),
+    /// Liveness probe. The id carries nothing; the frame only proves the link works.
+    Ping(u64),
 }
 
 /// The plaintext is wiped when the returned buffer drops.
@@ -49,6 +56,11 @@ pub fn encode_delivered(id: u64) -> Vec<u8> {
 
 pub fn encode_read(id: u64) -> Vec<u8> {
     encode_receipt(KIND_READ, id)
+}
+
+/// A liveness ping. The id is random and has no meaning.
+pub fn encode_ping(id: u64) -> Vec<u8> {
+    encode_receipt(KIND_PING, id)
 }
 
 fn encode_receipt(kind: u8, id: u64) -> Vec<u8> {
@@ -72,6 +84,7 @@ pub fn decode(plaintext: &[u8]) -> Result<Envelope<'_>, CoreError> {
         }),
         KIND_DELIVERED if plaintext.len() == ID_END => Ok(Envelope::Delivered(id)),
         KIND_READ if plaintext.len() == ID_END => Ok(Envelope::Read(id)),
+        KIND_PING if plaintext.len() == ID_END => Ok(Envelope::Ping(id)),
         _ => Err(CoreError::Malformed),
     }
 }
@@ -121,6 +134,19 @@ mod tests {
         let mut padded = encode_read(1);
         padded.push(0);
         assert!(decode(&padded).is_err());
+    }
+
+    #[test]
+    fn ping_round_trips_and_wrong_length_is_refused() {
+        assert_eq!(decode(&encode_ping(5)).unwrap(), Envelope::Ping(5));
+        let mut padded = encode_ping(1);
+        padded.push(0);
+        assert!(decode(&padded).is_err());
+        let short = &encode_ping(1)[..8];
+        assert!(decode(short).is_err());
+        assert!(decode(&[KIND_PING]).is_err());
+        // The next kind byte is still unknown.
+        assert!(decode(&[0x14, 0, 0, 0, 0, 0, 0, 0, 1]).is_err());
     }
 
     #[test]

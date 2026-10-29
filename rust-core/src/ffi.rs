@@ -14,14 +14,14 @@
 
 use std::collections::HashMap;
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use zeroize::Zeroizing;
 
 use crate::apk_transfer;
-use crate::double_ratchet::{DoubleRatchet, Header, Message};
+use crate::double_ratchet::{DoubleRatchet, Header, Message, Role};
 use crate::envelope::{self, Envelope};
 use crate::error::CoreError;
 use crate::handshake::{self, Identity, IdentityPublic, CHALLENGE_LEN};
@@ -213,7 +213,61 @@ struct Session {
     /// Set when a send or receive on the link failed. A dead link reads as not connected
     /// until a new handshake replaces the session.
     dead: AtomicBool,
+    /// Frames in a row that failed to open. Any good frame resets it. At
+    /// `MAX_BAD_OPENS` the session is marked dead so the app runs a new handshake instead
+    /// of polling a desynchronised ratchet forever. Touches no lock.
+    bad_opens: AtomicU32,
+    /// Liveness (finding 2.6). Milliseconds on this monotonic clock, measured from
+    /// `epoch`; no wall clock is involved. Both start at creation so a fresh session is
+    /// not instantly dead.
+    epoch: Instant,
+    last_rx_ms: AtomicU64,
+    last_tx_ms: AtomicU64,
+    /// When `receive_from_peer` was last entered. A gap longer than `ping_after` means the
+    /// process was frozen (suspend, Doze), not that the peer went quiet.
+    last_poll_ms: AtomicU64,
+    /// Quiet send time before a ping, and quiet receive time before the link is declared
+    /// dead. Fields, not bare consts, so tests can shorten them without public API.
+    ping_after: Duration,
+    dead_after: Duration,
 }
+
+impl Session {
+    fn mono_ms(&self) -> u64 {
+        self.epoch.elapsed().as_millis() as u64
+    }
+    fn note_rx(&self) {
+        self.last_rx_ms.store(self.mono_ms(), Ordering::Relaxed);
+    }
+    /// Records a poll and returns how long it has been since the previous one.
+    fn note_poll(&self) -> Duration {
+        let now = self.mono_ms();
+        let prev = self.last_poll_ms.swap(now, Ordering::Relaxed);
+        Duration::from_millis(now.saturating_sub(prev))
+    }
+    /// Marks the session dead and closes its link, taking no lock, so it is safe under the
+    /// ratchet lock. Closing makes the peer's next read fail, so it redials too.
+    fn kill(&self, link: &Arc<dyn Transport>) {
+        self.dead.store(true, Ordering::Relaxed);
+        link.close();
+    }
+    fn note_tx(&self) {
+        self.last_tx_ms.store(self.mono_ms(), Ordering::Relaxed);
+    }
+    fn quiet_for(&self, last: &AtomicU64) -> Duration {
+        Duration::from_millis(self.mono_ms().saturating_sub(last.load(Ordering::Relaxed)))
+    }
+}
+
+/// Nothing sent for this long on an idle poll: send a ping. Visible to a network observer
+/// as one small frame per quiet period (see PLAN.md Decisions, 2026-10-29).
+const PING_AFTER: Duration = Duration::from_secs(25);
+/// Nothing at all received for this long: the link is half-open, declare it dead.
+const DEAD_AFTER: Duration = Duration::from_secs(75);
+
+/// Consecutive failed opens after which a session is declared dead. One forged or
+/// damaged frame between good ones never gets here.
+const MAX_BAD_OPENS: u32 = 5;
 
 struct State {
     identity: Identity,
@@ -227,9 +281,10 @@ struct State {
     /// The peer a `listen_for_peer` call is waiting for, set only while it runs.
     /// Lets the UI show that a listener is up without a second source of truth.
     listening: Option<String>,
-    /// The challenge last issued by `responder_challenge`. Spent by the next
-    /// `accept_session`, whatever its outcome, so it cannot authenticate a second handshake.
-    pending_challenge: Option<[u8; CHALLENGE_LEN]>,
+    /// The challenge last issued by `responder_challenge`, with its ephemeral secret.
+    /// Spent by the next `accept_session`, once it gets past input validation and the pin check, whatever its outcome after that, so neither the challenge
+    /// nor the ephemeral key can serve a second handshake. Dropping it zeroizes the secret.
+    pending_challenge: Option<handshake::Challenge>,
     /// When each contact's link last came up, delivered something, or dropped (Unix ms).
     last_seen: HashMap<String, u64>,
     /// Newest message the user has read whose read receipt is not yet sent, per contact.
@@ -436,21 +491,28 @@ impl Messenger {
         let mut st = self.lock()?;
         st.pins.remove(&peer_id);
         st.sessions.remove(&peer_id);
+        // A receipt owed for an id of the old conversation must not be sent into the next one.
+        st.read_owed.remove(&peer_id);
+        st.last_seen.remove(&peer_id);
         Ok(())
     }
 
-    /// Responder side, first step: issues a fresh challenge and remembers it as the
-    /// one the next `accept_session` must answer. The caller sends these bytes to the
-    /// initiator, who passes them to `start_session`. A new call replaces the old challenge.
+    /// Responder side, first step: issues a fresh challenge and a fresh ephemeral X25519
+    /// key, and remembers them as the pair the next `accept_session` must answer. Returns
+    /// 64 bytes, `challenge (32) || ephemeral public key (32)`. The caller sends these bytes
+    /// to the initiator, who passes them to `start_session`. A new call replaces (and
+    /// zeroizes) the old pair.
     pub fn responder_challenge(&self) -> Result<Vec<u8>, FacadeError> {
         let challenge = handshake::new_challenge();
+        let offer = challenge.offer();
         self.lock()?.pending_challenge = Some(challenge);
-        Ok(challenge.to_vec())
+        Ok(offer_to_bytes(&offer))
     }
 
     /// Initiator side: encapsulate to the peer's identity and open a session, bound to
-    /// the responder's `challenge`. Pins the identity on first use; refuses a different
-    /// key for a pinned peer.
+    /// the responder's `challenge` (the 64 bytes `responder_challenge` returned, any other
+    /// length is `Malformed`). Pins the identity on first use; refuses a different key for
+    /// a pinned peer, and a low-order responder key (static or ephemeral) as `Malformed`.
     pub fn start_session(
         &self,
         peer_id: String,
@@ -458,7 +520,7 @@ impl Messenger {
         challenge: Vec<u8>,
     ) -> Result<HandshakeMessage, FacadeError> {
         let peer = to_core_public(peer)?;
-        let challenge = to_array32(&challenge)?;
+        let challenge = offer_from_bytes(&challenge)?;
         let mut st = self.lock()?;
         let (init, root) = handshake::initiate(&st.identity, &peer, &challenge)?;
         pin_or_check(&mut st, &peer_id, &peer)?;
@@ -466,6 +528,7 @@ impl Messenger {
             peer_id,
             Arc::new(session_for(
                 &root,
+                Role::Initiator,
                 INITIATOR_TO_RESPONDER,
                 RESPONDER_TO_INITIATOR,
                 None,
@@ -480,9 +543,11 @@ impl Messenger {
     }
 
     /// Responder side: derive the same root from the initiator's handshake message.
-    /// `challenge` must be the one `responder_challenge` issued, and it is spent by
-    /// this call whatever the outcome. Refuses with `NotPinned` if `peer_id` has no
-    /// pin, and with `AuthFailed` if the initiator's static key is not the pinned one,
+    /// `challenge` must be the 64 bytes `responder_challenge` issued. Once the input is well
+    /// formed and `peer_id` is pinned, the challenge and its ephemeral secret are spent by
+    /// this call whatever the outcome; a call refused earlier (wrong length, malformed
+    /// fields, `NotPinned`) leaves the pending challenge for a correct retry. Refuses with
+    /// `NotPinned` if `peer_id` has no pin, and with `AuthFailed` if the initiator's static key is not the pinned one,
     /// if the challenge is not the pending one, or if the confirmation tag does not
     /// verify. No session is stored on any refusal, so a replay leaves a live session alone.
     pub fn accept_session(
@@ -491,7 +556,7 @@ impl Messenger {
         init: HandshakeMessage,
         challenge: Vec<u8>,
     ) -> Result<(), FacadeError> {
-        let challenge = to_array32(&challenge)?;
+        let challenge = offer_from_bytes(&challenge)?;
         let init = handshake::HandshakeInit {
             ephemeral_x25519: to_array32(&init.ephemeral_x25519)?,
             initiator_x25519: to_array32(&init.initiator_x25519)?,
@@ -501,7 +566,7 @@ impl Messenger {
         let mut st = self.lock()?;
         let pinned = st.pins.get(&peer_id).ok_or(FacadeError::NotPinned)?.x25519;
         let issued = st.pending_challenge.take().ok_or(FacadeError::AuthFailed)?;
-        if issued != challenge {
+        if issued.offer() != challenge {
             return Err(FacadeError::AuthFailed);
         }
         let root = handshake::respond(&st.identity, &pinned, &init, &issued)?;
@@ -509,6 +574,7 @@ impl Messenger {
             peer_id,
             Arc::new(session_for(
                 &root,
+                Role::Responder,
                 RESPONDER_TO_INITIATOR,
                 INITIATOR_TO_RESPONDER,
                 None,
@@ -851,21 +917,47 @@ impl Messenger {
     pub fn receive_from_peer(&self, peer_id: String) -> Result<bool, FacadeError> {
         let session = self.session(&peer_id)?;
         let link = live_link(&session).ok_or(FacadeError::NoLink)?;
+        // A long gap between polls means this process was frozen, so the quiet it saw is
+        // not evidence against the peer: give the link a fresh window before judging it.
+        if session.note_poll() > session.ping_after {
+            session.note_rx();
+        }
         // The socket wait happens without the ratchet lock, so a send is not stalled.
         let frame = match wire::receive_frame(link.as_ref()) {
             Ok(Some(frame)) => frame,
-            Ok(None) => return Ok(false),
+            Ok(None) => {
+                self.check_liveness(&peer_id, &session, &link);
+                return Ok(false);
+            }
             Err(e) => {
                 self.mark_dead(&peer_id, &session);
                 return Err(e.into());
             }
         };
-        let plaintext = {
+        let opened = {
             let mut ratchet = lock_ratchet(&session.ratchet)?;
-            Zeroizing::new(wire::open_frame(&mut ratchet, &frame)?)
+            wire::open_frame(&mut ratchet, &frame)
+        };
+        let plaintext = match opened {
+            Ok(p) => {
+                // Any authentic frame, of any kind, proves the peer and the link are alive.
+                session.note_rx();
+                Zeroizing::new(p)
+            }
+            Err(e) => return Err(self.note_bad_open(&peer_id, &session, e)),
         };
         self.lock()?.last_seen.insert(peer_id.clone(), now_ms());
-        if let Some(id) = self.apply_opened(&peer_id, &plaintext)? {
+        let applied = match self.apply_opened(&peer_id, &plaintext) {
+            Ok(applied) => applied,
+            Err(e) => {
+                // The frame opened, so the ratchet is in sync; an envelope this build
+                // cannot read (a newer kind) must not count toward declaring it dead.
+                session.bad_opens.store(0, Ordering::Relaxed);
+                return Err(e);
+            }
+        };
+        session.bad_opens.store(0, Ordering::Relaxed);
+        if let Some(id) = applied {
             // Best effort: if this fails the message is still stored, and the contact
             // sees it as sent rather than delivered.
             let _ = self.send_sealed(&session, &link, &envelope::encode_delivered(id));
@@ -960,6 +1052,10 @@ impl Messenger {
         let mut st = self.lock()?;
         st.store.forget(&peer_id);
         st.sessions.remove(&peer_id);
+        // The ids a receipt refers to are gone with the history; a stale "last seen"
+        // would also describe a conversation that no longer exists.
+        st.read_owed.remove(&peer_id);
+        st.last_seen.remove(&peer_id);
         Ok(())
     }
 
@@ -1114,15 +1210,51 @@ impl Messenger {
     ) -> Result<(), FacadeError> {
         wire::send_message(link.as_ref(), ratchet, plain).map_err(|e| {
             if e == CoreError::Network {
-                session.dead.store(true, Ordering::Relaxed);
+                // Close as well as flag: a Wait-role link would otherwise stay open.
+                // `kill` takes no lock; last_seen is left to the next poll's mark_dead.
+                session.kill(link);
             }
             FacadeError::from(e)
-        })
+        })?;
+        session.note_tx();
+        Ok(())
+    }
+
+    /// Called on an idle poll. Pings after a quiet send period, and marks the session dead
+    /// (closing the link, so the app redials) after a quiet receive period.
+    fn check_liveness(&self, peer_id: &str, session: &Session, link: &Arc<dyn Transport>) {
+        if session.quiet_for(&session.last_rx_ms) >= session.dead_after {
+            self.mark_dead(peer_id, session);
+            return;
+        }
+        if session.quiet_for(&session.last_tx_ms) >= session.ping_after {
+            // Best effort: a send error already marks the session dead.
+            let _ = self.send_sealed(session, link, &envelope::encode_ping(random_id()));
+        }
+    }
+
+    /// Counts one frame that failed to open (authentication or format). After
+    /// `MAX_BAD_OPENS` in a row the session is marked dead, which `linked_peers` reports
+    /// so the app redials and runs a new handshake. Returns the error to hand back.
+    fn note_bad_open(&self, peer_id: &str, session: &Session, e: CoreError) -> FacadeError {
+        if matches!(e, CoreError::Auth | CoreError::Malformed) {
+            let n = session.bad_opens.fetch_add(1, Ordering::Relaxed) + 1;
+            if n >= MAX_BAD_OPENS {
+                self.mark_dead(peer_id, session);
+            }
+        }
+        e.into()
     }
 
     /// Marks the session's link dead and records when the contact was last seen.
     fn mark_dead(&self, peer_id: &str, session: &Session) {
         session.dead.store(true, Ordering::Relaxed);
+        // Closing makes the peer's next read fail, so it marks its side dead and redials.
+        // Chains are per direction: without this a peer whose own receives still open would
+        // keep sending into a socket nobody reads.
+        if let Some(link) = &session.link {
+            session.kill(link);
+        }
         if let Ok(mut st) = self.lock() {
             st.last_seen.insert(peer_id.to_owned(), now_ms());
         }
@@ -1143,6 +1275,8 @@ impl Messenger {
                 self.lock()?.store.advance(peer_id, id, Delivery::Delivered);
                 Ok(None)
             }
+            // Liveness only: not stored, not shown, never acknowledged.
+            Envelope::Ping(_) => Ok(None),
             Envelope::Read(id) => {
                 let mut st = self.lock()?;
                 st.store.advance(peer_id, id, Delivery::Delivered);
@@ -1190,7 +1324,8 @@ impl Messenger {
         peer_id: String,
         link: Arc<dyn Transport>,
     ) -> Result<(), FacadeError> {
-        // The responder speaks first with its challenge; the handshake is built on it.
+        // The responder speaks first with its challenge and ephemeral key; the handshake
+        // is built on both.
         let challenge = wire::receive_challenge(link.as_ref())?;
         let (init, root) = {
             let st = self.lock()?;
@@ -1200,6 +1335,7 @@ impl Messenger {
         wire::send_handshake(link.as_ref(), &init)?;
         let session = session_for(
             &root,
+            Role::Initiator,
             INITIATOR_TO_RESPONDER,
             RESPONDER_TO_INITIATOR,
             Some(link),
@@ -1219,11 +1355,12 @@ impl Messenger {
         link: Arc<dyn Transport>,
         expected: Option<&str>,
     ) -> Result<String, FacadeError> {
-        // A fresh challenge per connection, sent before the initiator's handshake.
-        // The handshake must answer this one, so a captured handshake from an earlier
-        // connection fails its tag here and the live session is not replaced.
+        // A fresh challenge and ephemeral key per connection, sent before the initiator's
+        // handshake. The handshake must answer this one, so a captured handshake from an
+        // earlier connection fails its tag here and the live session is not replaced. The
+        // ephemeral secret lives in this frame only and is zeroized when it returns.
         let challenge = handshake::new_challenge();
-        wire::send_challenge(link.as_ref(), &challenge)?;
+        wire::send_challenge(link.as_ref(), &challenge.offer())?;
         let init = wire::receive_handshake(link.as_ref())?;
         let mut st = self.lock()?;
         let peer_id = match expected {
@@ -1239,6 +1376,7 @@ impl Messenger {
         let root = handshake::respond(&st.identity, &pinned, &init, &challenge)?;
         let session = session_for(
             &root,
+            Role::Responder,
             RESPONDER_TO_INITIATOR,
             INITIATOR_TO_RESPONDER,
             Some(link),
@@ -1305,14 +1443,22 @@ fn wire_from_message(msg: Message) -> WireMessage {
 
 fn session_for(
     root: &Key32,
+    role: Role,
     send_label: &[u8],
     recv_label: &[u8],
     link: Option<Arc<dyn Transport>>,
 ) -> Session {
     Session {
-        ratchet: Mutex::new(DoubleRatchet::new(root, send_label, recv_label)),
+        ratchet: Mutex::new(DoubleRatchet::new(root, role, send_label, recv_label)),
         link,
         dead: AtomicBool::new(false),
+        bad_opens: AtomicU32::new(0),
+        epoch: Instant::now(),
+        last_rx_ms: AtomicU64::new(0),
+        last_tx_ms: AtomicU64::new(0),
+        last_poll_ms: AtomicU64::new(0),
+        ping_after: PING_AFTER,
+        dead_after: DEAD_AFTER,
     }
 }
 
@@ -1326,6 +1472,25 @@ fn to_core_public(p: PublicIdentity) -> Result<IdentityPublic, FacadeError> {
 
 fn to_array32(bytes: &[u8]) -> Result<[u8; 32], FacadeError> {
     bytes.try_into().map_err(|_| FacadeError::Malformed)
+}
+
+/// The responder's challenge as the in-process caller carries it: nonce, then ephemeral public key.
+fn offer_to_bytes(offer: &handshake::ChallengeOffer) -> Vec<u8> {
+    let mut out = Vec::with_capacity(CHALLENGE_LEN + 32);
+    out.extend_from_slice(&offer.nonce);
+    out.extend_from_slice(&offer.ephemeral);
+    out
+}
+
+/// Exactly 64 bytes, or `Malformed` (the old 32-byte challenge is refused here).
+fn offer_from_bytes(bytes: &[u8]) -> Result<handshake::ChallengeOffer, FacadeError> {
+    if bytes.len() != CHALLENGE_LEN + 32 {
+        return Err(FacadeError::Malformed);
+    }
+    Ok(handshake::ChallengeOffer {
+        nonce: to_array32(&bytes[..CHALLENGE_LEN])?,
+        ephemeral: to_array32(&bytes[CHALLENGE_LEN..])?,
+    })
 }
 
 #[cfg(test)]
@@ -1355,6 +1520,65 @@ mod update_facade_tests {
             m.verify_update(b"apk".to_vec(), 2, vec![0u8; 64], 1),
             Err(FacadeError::AuthFailed)
         );
+    }
+}
+
+#[cfg(test)]
+mod bad_open_tests {
+    use super::*;
+    use crate::transport::TransportError;
+    use std::collections::VecDeque;
+
+    /// Hands out the frames queued for it, then reports idle.
+    struct Inbox(Mutex<VecDeque<Vec<u8>>>);
+
+    impl Transport for Inbox {
+        fn send(&self, _frame: &[u8]) -> Result<(), TransportError> {
+            Ok(())
+        }
+        fn receive(&self) -> Result<Option<Vec<u8>>, TransportError> {
+            Ok(self.0.lock().unwrap().pop_front())
+        }
+    }
+
+    /// An authentic frame whose envelope kind this build does not know (a newer build's
+    /// message) must not count toward declaring the session dead: it proves the ratchet works.
+    #[test]
+    fn authentic_frames_with_an_unknown_envelope_kind_never_kill_the_session() {
+        let root = Key32([7u8; 32]);
+        let mut sender = DoubleRatchet::new(
+            &root,
+            Role::Initiator,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+        );
+        let inbox = Arc::new(Inbox(Mutex::new(VecDeque::new())));
+        let link: Arc<dyn Transport> = inbox.clone();
+        let session = session_for(
+            &root,
+            Role::Responder,
+            RESPONDER_TO_INITIATOR,
+            INITIATOR_TO_RESPONDER,
+            Some(link),
+        );
+        let bob = Messenger::new();
+        bob.lock()
+            .unwrap()
+            .sessions
+            .insert("a".into(), Arc::new(session));
+
+        for _ in 0..(MAX_BAD_OPENS * 2) {
+            let mut unknown = vec![0xEE];
+            unknown.extend_from_slice(&1u64.to_be_bytes());
+            let sealed = sender.seal(&unknown).unwrap();
+            let frame = wire::encode_message(&sealed);
+            inbox.0.lock().unwrap().push_back(frame);
+            assert_eq!(
+                bob.receive_from_peer("a".into()),
+                Err(FacadeError::Malformed)
+            );
+        }
+        assert_eq!(bob.linked_peers().unwrap(), vec!["a"]);
     }
 }
 
@@ -1416,5 +1640,336 @@ mod tor_session_tests {
         b.accept_session("a".into(), init, c).unwrap();
         a.tor_stop().unwrap();
         assert_eq!(a.peers().unwrap(), vec!["b".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod liveness_tests {
+    use super::*;
+    use crate::transport::TransportError;
+    use std::collections::VecDeque;
+    use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+
+    /// A link that delivers only what the test queues, counts what is sent into it and
+    /// records a close. With nothing queued it is a peer that has gone silent.
+    struct Scripted {
+        inbox: Mutex<VecDeque<Vec<u8>>>,
+        sent: AtomicU32,
+        closed: AtomicBool,
+    }
+
+    impl Scripted {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                inbox: Mutex::new(VecDeque::new()),
+                sent: AtomicU32::new(0),
+                closed: AtomicBool::new(false),
+            })
+        }
+    }
+
+    impl Transport for Scripted {
+        fn send(&self, _frame: &[u8]) -> Result<(), TransportError> {
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn receive(&self) -> Result<Option<Vec<u8>>, TransportError> {
+            let next = self.inbox.lock().unwrap().pop_front();
+            if next.is_none() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(next)
+        }
+        fn close(&self) {
+            self.closed.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// One end of an in-memory duplex link.
+    struct Chan {
+        tx: Mutex<Sender<Vec<u8>>>,
+        rx: Mutex<Receiver<Vec<u8>>>,
+    }
+
+    impl Transport for Chan {
+        fn send(&self, frame: &[u8]) -> Result<(), TransportError> {
+            self.tx
+                .lock()
+                .unwrap()
+                .send(frame.to_vec())
+                .map_err(|_| TransportError::Closed)
+        }
+        fn receive(&self) -> Result<Option<Vec<u8>>, TransportError> {
+            match self
+                .rx
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_millis(5))
+            {
+                Ok(f) => Ok(Some(f)),
+                Err(RecvTimeoutError::Timeout) => Ok(None),
+                Err(RecvTimeoutError::Disconnected) => Err(TransportError::Closed),
+            }
+        }
+    }
+
+    fn chan_pair() -> (Arc<Chan>, Arc<Chan>) {
+        let (t1, r1) = channel();
+        let (t2, r2) = channel();
+        (
+            Arc::new(Chan {
+                tx: Mutex::new(t1),
+                rx: Mutex::new(r2),
+            }),
+            Arc::new(Chan {
+                tx: Mutex::new(t2),
+                rx: Mutex::new(r1),
+            }),
+        )
+    }
+
+    /// A responder-side session for "a" on `link`, plus the sender's ratchet.
+    fn bob_with(link: Arc<dyn Transport>) -> (Arc<Messenger>, DoubleRatchet) {
+        let root = Key32([9u8; 32]);
+        let sender = DoubleRatchet::new(
+            &root,
+            Role::Initiator,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+        );
+        let session = session_for(
+            &root,
+            Role::Responder,
+            RESPONDER_TO_INITIATOR,
+            INITIATOR_TO_RESPONDER,
+            Some(link),
+        );
+        let bob = Messenger::new();
+        bob.lock()
+            .unwrap()
+            .sessions
+            .insert("a".into(), Arc::new(session));
+        (bob, sender)
+    }
+
+    fn frame_of(sender: &mut DoubleRatchet, plain: &[u8]) -> Vec<u8> {
+        wire::encode_message(&sender.seal(plain).unwrap())
+    }
+
+    /// Deadline for a condition that must happen; far above the timing under test so a
+    /// loaded 2-vCPU CI runner does not turn it into a flake.
+    const GENEROUS: Duration = Duration::from_secs(10);
+
+    fn set_timing(m: &Messenger, peer: &str, ping_after: Duration, dead_after: Duration) {
+        let mut st = m.lock().unwrap();
+        let s = Arc::get_mut(st.sessions.get_mut(peer).unwrap()).unwrap();
+        s.ping_after = ping_after;
+        s.dead_after = dead_after;
+    }
+
+    #[test]
+    fn a_silent_peer_is_declared_dead_within_the_bound() {
+        // The clock starts before the session exists, as its own starts at creation.
+        let start = Instant::now();
+        let link = Scripted::new();
+        let (bob, _sender) = bob_with(link.clone());
+        let (ping, dead) = (Duration::from_millis(100), Duration::from_millis(1500));
+        set_timing(&bob, "a", ping, dead);
+        while !bob.linked_peers().unwrap().is_empty() {
+            assert!(start.elapsed() < GENEROUS, "silent peer never detected");
+            assert_eq!(bob.receive_from_peer("a".into()), Ok(false));
+        }
+        assert!(start.elapsed() >= dead, "declared dead too early");
+        assert!(
+            link.closed.load(Ordering::SeqCst),
+            "dead link must be closed"
+        );
+        assert!(
+            link.sent.load(Ordering::SeqCst) >= 1,
+            "no ping was sent first"
+        );
+    }
+
+    #[test]
+    fn a_ping_is_not_stored_shown_or_acknowledged() {
+        let link = Scripted::new();
+        let (bob, mut sender) = bob_with(link.clone());
+        let f = frame_of(&mut sender, &envelope::encode_ping(42));
+        link.inbox.lock().unwrap().push_back(f);
+        assert_eq!(bob.receive_from_peer("a".into()), Ok(true));
+        assert!(bob.conversation("a".into()).unwrap().is_empty());
+        assert_eq!(
+            link.sent.load(Ordering::SeqCst),
+            0,
+            "a ping was acknowledged"
+        );
+    }
+
+    #[test]
+    fn a_ping_resets_the_bad_open_counter() {
+        let link = Scripted::new();
+        let (bob, mut sender) = bob_with(link.clone());
+        for round in 0..3 {
+            for _ in 0..(MAX_BAD_OPENS - 1) {
+                let mut f = frame_of(&mut sender, &envelope::encode_ping(1));
+                *f.last_mut().unwrap() ^= 1;
+                link.inbox.lock().unwrap().push_back(f);
+                assert!(bob.receive_from_peer("a".into()).is_err());
+            }
+            let f = frame_of(&mut sender, &envelope::encode_ping(2));
+            link.inbox.lock().unwrap().push_back(f);
+            assert_eq!(bob.receive_from_peer("a".into()), Ok(true), "round {round}");
+        }
+        assert_eq!(bob.linked_peers().unwrap(), vec!["a"]);
+    }
+
+    fn connected_pair() -> (Arc<Messenger>, Arc<Messenger>) {
+        let a = Messenger::new();
+        let b = Messenger::new();
+        a.scan_pairing("b".into(), b.own_pairing_payload(String::new()).unwrap())
+            .unwrap();
+        b.scan_pairing("a".into(), a.own_pairing_payload(String::new()).unwrap())
+            .unwrap();
+        let (x, y) = chan_pair();
+        let b2 = Arc::clone(&b);
+        let responder = std::thread::spawn(move || b2.respond_on_link(y, None));
+        a.initiate_on_link("b".into(), x).unwrap();
+        assert_eq!(responder.join().unwrap().unwrap(), "a");
+        (a, b)
+    }
+
+    /// Polls both phones for `run_for`, like the app's receive loops.
+    fn run_loops(a: &Arc<Messenger>, b: &Arc<Messenger>, run_for: Duration) {
+        let stop = Arc::new(AtomicBool::new(false));
+        let spawn = |m: &Arc<Messenger>, peer: &'static str| {
+            let (m, stop) = (Arc::clone(m), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    let _ = m.receive_from_peer(peer.into());
+                }
+            })
+        };
+        let (ta, tb) = (spawn(a, "b"), spawn(b, "a"));
+        std::thread::sleep(run_for);
+        stop.store(true, Ordering::SeqCst);
+        ta.join().unwrap();
+        tb.join().unwrap();
+    }
+
+    #[test]
+    fn an_idle_but_alive_pair_never_dies_and_traffic_still_flows() {
+        let (a, b) = connected_pair();
+        let (ping, dead) = (Duration::from_millis(100), Duration::from_millis(1500));
+        set_timing(&a, "b", ping, dead);
+        set_timing(&b, "a", ping, dead);
+        // Idle for 25 ping periods and well over one dead bound.
+        run_loops(&a, &b, Duration::from_millis(2500));
+        assert_eq!(a.linked_peers().unwrap(), vec!["b"]);
+        assert_eq!(b.linked_peers().unwrap(), vec!["a"]);
+        // Pings left no trace in either conversation.
+        assert!(a.conversation("b".into()).unwrap().is_empty());
+        assert!(b.conversation("a".into()).unwrap().is_empty());
+        // Normal traffic after the idle spell, then idle again.
+        a.send_text("b".into(), "hi".into()).unwrap();
+        run_loops(&a, &b, Duration::from_millis(400));
+        assert_eq!(b.conversation("a".into()).unwrap().len(), 1);
+        assert_eq!(a.linked_peers().unwrap(), vec!["b"]);
+        assert_eq!(b.linked_peers().unwrap(), vec!["a"]);
+    }
+
+    #[test]
+    fn a_peer_that_stops_answering_is_dropped_by_the_other_side() {
+        let start = Instant::now();
+        let (a, b) = connected_pair();
+        let (ping, dead) = (Duration::from_millis(100), Duration::from_millis(1500));
+        set_timing(&a, "b", ping, dead);
+        set_timing(&b, "a", ping, dead);
+        // Only a polls; b is half-open (its socket is up but nothing is processed).
+        while !a.linked_peers().unwrap().is_empty() {
+            assert!(start.elapsed() < GENEROUS, "half-open link never detected");
+            let _ = a.receive_from_peer("b".into());
+        }
+        assert!(start.elapsed() >= dead);
+        drop(b);
+    }
+
+    #[test]
+    fn a_failed_send_marks_the_session_dead_and_closes_the_link() {
+        // Alice's end of a pair; Bob's end is dropped, so her send hits a closed channel.
+        let (x, y) = chan_pair();
+        let root = Key32([9u8; 32]);
+        let session = session_for(
+            &root,
+            Role::Initiator,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+            Some(x.clone() as Arc<dyn Transport>),
+        );
+        let alice = Messenger::new();
+        alice
+            .lock()
+            .unwrap()
+            .sessions
+            .insert("b".into(), Arc::new(session));
+        drop(y);
+        let s = alice.session("b").unwrap();
+        let link: Arc<dyn Transport> = x;
+        assert!(alice.send_sealed(&s, &link, b"x").is_err());
+        assert!(s.dead.load(Ordering::Relaxed));
+        assert!(alice.linked_peers().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failed_send_closes_the_link_so_the_peer_sees_the_drop() {
+        let link = FailingSend::new();
+        let (bob, _sender) = bob_with(link.clone());
+        let s = bob.session("a").unwrap();
+        let l: Arc<dyn Transport> = link.clone();
+        assert!(bob.send_sealed(&s, &l, b"x").is_err());
+        assert!(s.dead.load(Ordering::SeqCst));
+        assert!(link.closed.load(Ordering::SeqCst), "link left open");
+    }
+
+    /// A link whose sends fail with a network error and which records a close.
+    struct FailingSend {
+        closed: AtomicBool,
+    }
+
+    impl FailingSend {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                closed: AtomicBool::new(false),
+            })
+        }
+    }
+
+    impl Transport for FailingSend {
+        fn send(&self, _frame: &[u8]) -> Result<(), TransportError> {
+            Err(TransportError::Closed)
+        }
+        fn receive(&self) -> Result<Option<Vec<u8>>, TransportError> {
+            Ok(None)
+        }
+        fn close(&self) {
+            self.closed.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_frozen_process_does_not_kill_a_healthy_session_on_its_first_poll() {
+        let link = Scripted::new();
+        let (bob, _sender) = bob_with(link.clone());
+        let (ping, dead) = (Duration::from_millis(50), Duration::from_millis(300));
+        set_timing(&bob, "a", ping, dead);
+        assert_eq!(bob.receive_from_peer("a".into()), Ok(false));
+        // The process is frozen for longer than the dead bound, then resumes.
+        std::thread::sleep(dead + Duration::from_millis(100));
+        assert_eq!(bob.receive_from_peer("a".into()), Ok(false));
+        assert_eq!(
+            bob.linked_peers().unwrap(),
+            vec!["a"],
+            "a frozen process killed a healthy session"
+        );
+        assert!(!link.closed.load(Ordering::SeqCst));
     }
 }

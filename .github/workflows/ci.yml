@@ -1,0 +1,66 @@
+name: CI
+
+# Rust checks only. No Android build, no secrets, no release or publish steps
+# (only the owner publishes releases). Commands mirror mise.toml:
+# rust:lint, rust:test, rust:lint:tor, rust:test:tor. The live Tor tests
+# (rust:live) are ignored tests and are never run here.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: rust-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-core
+          key: default
+      - name: Format check
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
+
+  rust-tor:
+    name: Rust (Tor feature)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: rust-core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-core
+          key: tor
+      - name: Clippy (tor)
+        run: cargo clippy --features tor --all-targets -- -D warnings
+      - name: Test (tor, no live network tests)
+        run: cargo test --features tor

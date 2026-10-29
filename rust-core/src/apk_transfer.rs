@@ -52,8 +52,17 @@ const HEADER_LEN: usize = 1 + 8 + SIGNATURE_LEN + 4;
 /// allows a long write before giving up.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Longest the receiver waits on a stalled sender mid-transfer.
+/// Longest the receiver waits on one read from a stalled sender.
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// One overall limit on a transfer, from accept to the last body byte. Without
+/// it a peer sending a byte just inside each read timeout holds the receiver
+/// for hours. Ten minutes carries 64 MiB at about 0.9 Mbit/s.
+const TRANSFER_DEADLINE: Duration = Duration::from_secs(600);
+
+/// The body buffer grows by at most this much per step, as bytes arrive, so a
+/// peer that announces a large length and sends nothing costs one chunk.
+const BODY_CHUNK: usize = 1024 * 1024;
 
 /// Writes one update. Refuses an empty or oversize APK before writing anything.
 pub fn write_update<W: Write>(
@@ -104,9 +113,24 @@ pub fn read_update<R: Read>(
     if len == 0 || len > MAX_APK_LEN {
         return Err(CoreError::Malformed);
     }
-    apk.try_reserve_exact(len).map_err(|_| CoreError::Network)?;
-    apk.resize(len, 0);
-    r.read_exact(apk).map_err(|_| CoreError::Network)?;
+    // Grow in bounded steps as data arrives; the announced length is unsigned
+    // and unproven, so it must not decide how much memory is reserved.
+    while apk.len() < len {
+        let start = apk.len();
+        let step = BODY_CHUNK.min(len - start);
+        let grown = apk
+            .try_reserve_exact(step)
+            .map_err(|_| CoreError::Network)
+            .and_then(|()| {
+                apk.resize(start + step, 0);
+                r.read_exact(&mut apk[start..])
+                    .map_err(|_| CoreError::Network)
+            });
+        if let Err(e) = grown {
+            apk.clear();
+            return Err(e);
+        }
+    }
     Ok((u64::from_be_bytes(version_bytes), signature))
 }
 
@@ -159,11 +183,38 @@ pub fn receive_update_on(
     stream
         .set_nonblocking(false)
         .map_err(|_| CoreError::Network)?;
-    stream
-        .set_read_timeout(Some(READ_TIMEOUT))
-        .map_err(|_| CoreError::Network)?;
-    let mut stream = stream;
-    read_update(&mut stream, apk)
+    read_update_with_deadline(stream, TRANSFER_DEADLINE, apk)
+}
+
+/// Reads one update from `stream`, giving up once `limit` has passed in total.
+fn read_update_with_deadline(
+    stream: TcpStream,
+    limit: Duration,
+    apk: &mut Vec<u8>,
+) -> Result<(u64, [u8; SIGNATURE_LEN]), CoreError> {
+    let mut reader = DeadlineStream {
+        stream,
+        deadline: Instant::now() + limit,
+    };
+    read_update(&mut reader, apk)
+}
+
+/// A socket whose every read is bounded by one fixed deadline, so slow
+/// trickling cannot extend the transfer past it.
+struct DeadlineStream {
+    stream: TcpStream,
+    deadline: Instant,
+}
+
+impl Read for DeadlineStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.stream.set_read_timeout(Some(left.min(READ_TIMEOUT)))?;
+        self.stream.read(buf)
+    }
 }
 
 #[cfg(test)]
@@ -242,6 +293,60 @@ mod tests {
             apk.capacity(),
             0,
             "no buffer may be reserved for a refused length"
+        );
+    }
+
+    #[test]
+    fn trickling_sender_cut_off_at_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let sender = std::thread::spawn(move || {
+            let mut s = TcpStream::connect(addr).unwrap();
+            let mut wire = header(1000);
+            wire.extend_from_slice(&[0u8; 1000]);
+            for b in wire {
+                if s.write_all(&[b]).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let start = Instant::now();
+        let mut apk = Vec::new();
+        let r = read_update_with_deadline(stream, Duration::from_millis(400), &mut apk);
+        assert_eq!(r, Err(CoreError::Network));
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "deadline not enforced"
+        );
+        sender.join().unwrap();
+    }
+
+    #[test]
+    fn large_transfer_round_trips_in_chunks() {
+        let apk: Vec<u8> = (0..(2 * BODY_CHUNK + 12_345) as u32)
+            .map(|i| (i % 253) as u8)
+            .collect();
+        let mut wire = header(apk.len() as u32);
+        wire.extend_from_slice(&apk);
+        let mut got = Vec::new();
+        read_update(&mut Cursor::new(wire), &mut got).unwrap();
+        assert_eq!(got, apk);
+    }
+
+    #[test]
+    fn announced_length_without_data_does_not_reserve_it() {
+        let wire = header(MAX_APK_LEN as u32);
+        let mut apk = Vec::new();
+        assert_eq!(
+            read_update(&mut Cursor::new(wire), &mut apk),
+            Err(CoreError::Network)
+        );
+        assert!(
+            apk.capacity() <= 2 * BODY_CHUNK,
+            "reserved {}",
+            apk.capacity()
         );
     }
 

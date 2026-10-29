@@ -2,9 +2,11 @@ package org.sovereign.mesh
 
 /**
  * Turns a failure into plain text the user can read, copy and send. Pure Kotlin so the JVM tests
- * cover it. It records only class names, exception messages and stack frames. The core's errors
- * are written never to carry key or message content (CLAUDE.md rule 3), and nothing else is
- * added to the report, so it is safe to share. It is built in memory and never written to disk.
+ * cover it. It records class names and stack frames for every throwable. It prints a message only
+ * for the core's FacadeException (fixed strings, CLAUDE.md rule 3) and a short allow-list of
+ * linker and VM errors whose text cannot hold user input. Any other message, such as a
+ * NumberFormatException quoting a chat line, is left out, so the report cannot carry user text.
+ * It is built in memory and never written to disk.
  */
 object CrashReport {
     // The report travels in an Intent extra, which has a size limit, and a person has to read it.
@@ -39,8 +41,26 @@ object CrashReport {
             "The previous run of the app ended abnormally and could not report why itself.\n$what\n",
     )
 
+    // Matched by name so this file stays pure Kotlin. Nested FacadeException types are named
+    // "uniffi.rust_core.FacadeException$Xxx". This relies on the keep rule `-keep class uniffi.** { *; }`
+    // in app/proguard-rules.pro; if R8 renamed these classes the allow-list would silently stop matching.
+    private const val FACADE_PREFIX = "uniffi.rust_core.FacadeException"
+    private val MESSAGE_SAFE = setOf(
+        "java.lang.UnsatisfiedLinkError",
+        "java.lang.NoClassDefFoundError",
+        "java.lang.ClassNotFoundException",
+        "java.lang.OutOfMemoryError",
+        "java.lang.StackOverflowError",
+    )
+
+    private fun messageIsSafe(error: Throwable): Boolean {
+        val name = error.javaClass.name
+        return name == FACADE_PREFIX || name.startsWith("$FACADE_PREFIX$") || name in MESSAGE_SAFE
+    }
+
     private fun describe(error: Throwable): String {
         val name = error.javaClass.name
+        if (!messageIsSafe(error)) return name
         // A message that itself throws must not hide the crash it belongs to.
         val message = try {
             error.message?.take(MAX_MESSAGE)

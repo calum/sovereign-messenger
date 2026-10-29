@@ -26,8 +26,8 @@ The Rust core (`rust-core/`) does the crypto, storage and Tor. The Kotlin app (`
 
 ## Where it's at
 
-- **Working:** the crypto core, the encrypted vault, the Tor transport, and an app that installs and starts on a phone. Over 300 automated tests pass. Two identities have chatted over the real Tor network on a laptop.
-- **Not tested yet:** two real phones talking to each other. Until that works, nothing here claims it is private from someone watching the network.
+- **Written and tested on a computer:** the crypto core, the encrypted vault, the Tor transport and a liveness check, with unit and integration tests in Rust and JVM tests in Kotlin. Two identities have chatted over the real Tor network in one test on a laptop. The app has been installed and started on one phone; what the vault and Tor did there was not checked.
+- **Not tested yet:** two real phones talking to each other, and the camera scan, the Keystore vault and Tor on a phone. Until that works, nothing here claims it is private from someone watching the network. App updates are built but every update is refused, because no developer key is set.
 - **Not reviewed:** nobody independent has checked the crypto.
 
 More detail is in [docs/status.md](docs/status.md). [PLAN.md](PLAN.md) is the checklist and the log of decisions.
@@ -38,6 +38,8 @@ More detail is in [docs/status.md](docs/status.md). [PLAN.md](PLAN.md) is the ch
 mise run check          # lint and run every test
 mise run android:debug  # build the debug APK
 ```
+
+CI (`.github/workflows/ci.yml`) is set up to run the Rust checks only (fmt, clippy, tests, with and without the Tor feature); it has run green on the pull request that added it (2026-10-29). It does not build the Android app or run the Kotlin tests.
 
 Setup for the Android SDK, NDK and Windows is in [docs/setup.md](docs/setup.md). The checks that need a person and a phone are in [docs/owner-test-list.md](docs/owner-test-list.md).
 

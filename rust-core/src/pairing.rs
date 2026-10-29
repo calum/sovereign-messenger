@@ -40,8 +40,49 @@ pub fn encode(public: &IdentityPublic, hint: &str) -> Result<Vec<u8>, CoreError>
     Ok(out)
 }
 
+/// True if `key` is an X25519 u-coordinate of order dividing 8 (any DH with it gives an
+/// all-zero output). X25519 ignores bit 255 and reduces mod p = 2^255 - 19, so the
+/// check does the same: clear the top bit, fold p..p+18 down to 0..18, then compare
+/// with the five canonical low-order values. Handshake also checks every DH output;
+/// this refuses the key at scan time.
+pub fn is_low_order(key: &[u8; 32]) -> bool {
+    // Little-endian canonical encodings: 0, 1, the two order-8 points, and p - 1.
+    const LOW: [[u8; 32]; 5] = [
+        [0; 32],
+        {
+            let mut b = [0u8; 32];
+            b[0] = 1;
+            b
+        },
+        [
+            0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f,
+            0xc4, 0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16,
+            0x5f, 0x49, 0xb8, 0x00,
+        ],
+        [
+            0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83,
+            0xef, 0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd,
+            0xd0, 0x9f, 0x11, 0x57,
+        ],
+        {
+            let mut b = [0xffu8; 32];
+            b[0] = 0xec;
+            b[31] = 0x7f;
+            b
+        },
+    ];
+    let mut k = *key;
+    k[31] &= 0x7f;
+    // Non-canonical: k >= p means bytes 1..=30 are 0xff, byte 31 is 0x7f, byte 0 >= 0xed.
+    if k[31] == 0x7f && k[1..31].iter().all(|&b| b == 0xff) && k[0] >= 0xed {
+        k = [0u8; 32];
+        k[0] = key[0] - 0xed;
+    }
+    LOW.contains(&k)
+}
+
 /// Parses a scanned payload. Rejects bad magic, unknown version, wrong length,
-/// trailing bytes, an all-zero X25519 key (a low-order point), an onion key that is
+/// trailing bytes, an X25519 key of small order (see `is_low_order`), an onion key that is
 /// not a valid, non-weak Ed25519 point, and a bad hint. Version 1 (no onion key) is refused.
 pub fn decode(bytes: &[u8]) -> Result<(IdentityPublic, String), CoreError> {
     let fixed = 4 + 1 + 32 + 32 + MLKEM768_EK_LEN + 1;
@@ -50,7 +91,7 @@ pub fn decode(bytes: &[u8]) -> Result<(IdentityPublic, String), CoreError> {
     }
     let mut x25519 = [0u8; 32];
     x25519.copy_from_slice(&bytes[5..37]);
-    if x25519 == [0u8; 32] {
+    if is_low_order(&x25519) {
         return Err(CoreError::Malformed);
     }
     let mut onion = [0u8; 32];

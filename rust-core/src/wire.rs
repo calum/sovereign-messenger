@@ -8,7 +8,7 @@
 //!
 //! | tag  | frame      | layout                                                        | length        |
 //! |------|------------|---------------------------------------------------------------|---------------|
-//! | 0x03 | challenge  | tag, challenge (32)                                           | 33 bytes      |
+//! | 0x03 | challenge  | tag, challenge (32), responder ephemeral X25519 public (32)   | 65 bytes      |
 //! | 0x01 | handshake  | tag, ephemeral X25519 (32), initiator static X25519 (32), ML-KEM-768 ciphertext (1088), confirmation tag (32) | 1185 bytes |
 //! | 0x02 | message    | tag, ratchet header (49), ciphertext (at least 16)            | at least 66 bytes |
 //!
@@ -16,7 +16,13 @@
 //! chain length (u64 BE), counter (u64 BE). It is authenticated as AEAD associated data.
 //!
 //! The responder sends the challenge first, once per connection. The handshake carries
-//! a confirmation tag over the challenge, so a handshake captured earlier fails.
+//! a confirmation tag over the challenge and the responder's ephemeral key, so a
+//! handshake captured earlier fails and the key cannot be swapped in transit.
+//!
+//! Handshake v2 (2026-10-29) grew the challenge frame from 33 to 65 bytes. The tag byte
+//! is unchanged; the exact length check refuses the old 33-byte frame as `Malformed`,
+//! and the `v2` labels in the key derivation mean the two versions can never agree on
+//! a root. Builds before v2 cannot connect to builds after it.
 //!
 //! Security property: nothing here decides authenticity. A malformed frame is
 //! refused by length or tag; a forged or altered chat message is refused by the
@@ -26,7 +32,7 @@ use std::time::Instant;
 
 use crate::double_ratchet::{header_bytes, header_from_bytes, DoubleRatchet, Message, HEADER_LEN};
 use crate::error::CoreError;
-use crate::handshake::{HandshakeInit, CHALLENGE_LEN};
+use crate::handshake::{ChallengeOffer, HandshakeInit, CHALLENGE_LEN};
 use crate::transport::{Transport, TransportError};
 
 /// Direction labels. Both peers derive the same two chains from the root; the
@@ -48,8 +54,8 @@ const STATIC_LEN: usize = 32;
 const TAG_LEN: usize = 32;
 /// Tag, ephemeral key, initiator static key, ML-KEM ciphertext, confirmation tag: 1185 bytes.
 const HANDSHAKE_LEN: usize = 1 + EPHEMERAL_LEN + STATIC_LEN + MLKEM768_CT_LEN + TAG_LEN;
-/// Tag, then the 32-byte challenge: 33 bytes.
-const CHALLENGE_FRAME_LEN: usize = 1 + CHALLENGE_LEN;
+/// Tag, the 32-byte challenge, the responder's ephemeral public key: 65 bytes.
+const CHALLENGE_FRAME_LEN: usize = 1 + CHALLENGE_LEN + EPHEMERAL_LEN;
 /// Tag, then the ratchet header (49 bytes), then the ciphertext. A ChaCha20-Poly1305
 /// ciphertext is at least the 16-byte tag, so a message frame is at least 66 bytes.
 const MESSAGE_MIN_LEN: usize = 1 + HEADER_LEN + 16;
@@ -86,33 +92,34 @@ pub fn decode_handshake(frame: &[u8]) -> Result<HandshakeInit, CoreError> {
     })
 }
 
-/// Layout: `[tag 0x03][challenge 32]`. Only the responder sends it.
-pub fn encode_challenge(challenge: &[u8; CHALLENGE_LEN]) -> Vec<u8> {
+/// Layout: `[tag 0x03][challenge 32][responder ephemeral X25519 public 32]`. Only the
+/// responder sends it.
+pub fn encode_challenge(offer: &ChallengeOffer) -> Vec<u8> {
     let mut out = Vec::with_capacity(CHALLENGE_FRAME_LEN);
     out.push(TAG_CHALLENGE);
-    out.extend_from_slice(challenge);
+    out.extend_from_slice(&offer.nonce);
+    out.extend_from_slice(&offer.ephemeral);
     out
 }
 
-/// A challenge frame of any other length or tag is refused as `Malformed`.
-pub fn decode_challenge(frame: &[u8]) -> Result<[u8; CHALLENGE_LEN], CoreError> {
+/// A challenge frame of any other length or tag (including the 33-byte frame of the
+/// previous handshake version) is refused as `Malformed`.
+pub fn decode_challenge(frame: &[u8]) -> Result<ChallengeOffer, CoreError> {
     if frame.len() != CHALLENGE_FRAME_LEN || frame[0] != TAG_CHALLENGE {
         return Err(CoreError::Malformed);
     }
-    let mut challenge = [0u8; CHALLENGE_LEN];
-    challenge.copy_from_slice(&frame[1..]);
-    Ok(challenge)
+    let mut nonce = [0u8; CHALLENGE_LEN];
+    nonce.copy_from_slice(&frame[1..1 + CHALLENGE_LEN]);
+    let mut ephemeral = [0u8; EPHEMERAL_LEN];
+    ephemeral.copy_from_slice(&frame[1 + CHALLENGE_LEN..]);
+    Ok(ChallengeOffer { nonce, ephemeral })
 }
 
-pub fn send_challenge(
-    link: &dyn Transport,
-    challenge: &[u8; CHALLENGE_LEN],
-) -> Result<(), CoreError> {
-    link.send(&encode_challenge(challenge))
-        .map_err(map_transport)
+pub fn send_challenge(link: &dyn Transport, offer: &ChallengeOffer) -> Result<(), CoreError> {
+    link.send(&encode_challenge(offer)).map_err(map_transport)
 }
 
-pub fn receive_challenge(link: &dyn Transport) -> Result<[u8; CHALLENGE_LEN], CoreError> {
+pub fn receive_challenge(link: &dyn Transport) -> Result<ChallengeOffer, CoreError> {
     decode_challenge(&next_frame(link)?)
 }
 
@@ -211,13 +218,14 @@ fn map_transport(e: TransportError) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handshake::{initiate, Identity};
+    use crate::double_ratchet::Role;
+    use crate::handshake::{initiate, new_challenge, Identity};
     use crate::secret::Key32;
 
     #[test]
     fn handshake_frame_round_trips() {
         let (me, public) = Identity::generate();
-        let (init, _root) = initiate(&me, &public, &[9u8; 32]).unwrap();
+        let (init, _root) = initiate(&me, &public, &new_challenge().offer()).unwrap();
         let frame = encode_handshake(&init);
         let back = decode_handshake(&frame).unwrap();
         assert_eq!(back.ephemeral_x25519, init.ephemeral_x25519);
@@ -228,7 +236,7 @@ mod tests {
     #[test]
     fn handshake_frame_with_wrong_length_is_refused() {
         let (me, public) = Identity::generate();
-        let (init, _root) = initiate(&me, &public, &[9u8; 32]).unwrap();
+        let (init, _root) = initiate(&me, &public, &new_challenge().offer()).unwrap();
         let mut frame = encode_handshake(&init);
         frame.pop();
         assert!(matches!(
@@ -246,7 +254,7 @@ mod tests {
     #[test]
     fn frame_with_wrong_tag_is_refused() {
         let (me, public) = Identity::generate();
-        let (init, _root) = initiate(&me, &public, &[9u8; 32]).unwrap();
+        let (init, _root) = initiate(&me, &public, &new_challenge().offer()).unwrap();
         let mut frame = encode_handshake(&init);
         frame[0] = TAG_MESSAGE;
         assert!(matches!(
@@ -258,20 +266,36 @@ mod tests {
     #[test]
     fn handshake_frame_carries_the_confirmation_tag() {
         let (me, public) = Identity::generate();
-        let (init, _root) = initiate(&me, &public, &[9u8; 32]).unwrap();
+        let (init, _root) = initiate(&me, &public, &new_challenge().offer()).unwrap();
         let back = decode_handshake(&encode_handshake(&init)).unwrap();
         assert_eq!(back.tag, init.tag);
     }
 
+    fn offer() -> ChallengeOffer {
+        ChallengeOffer {
+            nonce: [4u8; CHALLENGE_LEN],
+            ephemeral: [5u8; 32],
+        }
+    }
+
     #[test]
     fn challenge_frame_round_trips() {
-        let nonce = [4u8; CHALLENGE_LEN];
-        assert_eq!(decode_challenge(&encode_challenge(&nonce)).unwrap(), nonce);
+        let frame = encode_challenge(&offer());
+        assert_eq!(frame.len(), 65);
+        assert_eq!(decode_challenge(&frame).unwrap(), offer());
+    }
+
+    #[test]
+    fn old_33_byte_challenge_frame_is_refused() {
+        let mut old = vec![TAG_CHALLENGE];
+        old.extend_from_slice(&[4u8; CHALLENGE_LEN]);
+        assert_eq!(old.len(), 33);
+        assert!(matches!(decode_challenge(&old), Err(CoreError::Malformed)));
     }
 
     #[test]
     fn challenge_frame_with_wrong_length_is_refused() {
-        let mut frame = encode_challenge(&[4u8; CHALLENGE_LEN]);
+        let mut frame = encode_challenge(&offer());
         frame.pop();
         assert!(matches!(
             decode_challenge(&frame),
@@ -287,7 +311,7 @@ mod tests {
 
     #[test]
     fn challenge_frame_with_wrong_tag_is_refused() {
-        let mut frame = encode_challenge(&[4u8; CHALLENGE_LEN]);
+        let mut frame = encode_challenge(&offer());
         frame[0] = TAG_HANDSHAKE;
         assert!(matches!(
             decode_challenge(&frame),
@@ -298,7 +322,12 @@ mod tests {
     #[test]
     fn message_frame_round_trips() {
         let root = Key32([3u8; 32]);
-        let mut send = DoubleRatchet::new(&root, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
+        let mut send = DoubleRatchet::new(
+            &root,
+            Role::Initiator,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+        );
         let sealed = send.seal(b"payload").unwrap();
         let back = decode_message(&encode_message(&sealed)).unwrap();
         assert_eq!(back.header, sealed.header);
@@ -308,7 +337,12 @@ mod tests {
     #[test]
     fn message_frame_with_unknown_version_is_refused() {
         let root = Key32([3u8; 32]);
-        let mut send = DoubleRatchet::new(&root, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
+        let mut send = DoubleRatchet::new(
+            &root,
+            Role::Initiator,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+        );
         let mut frame = encode_message(&send.seal(b"payload").unwrap());
         frame[1] = crate::double_ratchet::RATCHET_VERSION + 1;
         assert!(matches!(decode_message(&frame), Err(CoreError::Malformed)));
@@ -325,7 +359,7 @@ mod tests {
     #[test]
     fn mlkem_ciphertext_length_matches_the_library() {
         let (me, public) = Identity::generate();
-        let (init, _root) = initiate(&me, &public, &[9u8; 32]).unwrap();
+        let (init, _root) = initiate(&me, &public, &new_challenge().offer()).unwrap();
         assert_eq!(init.mlkem_ct.len(), MLKEM768_CT_LEN);
     }
 }

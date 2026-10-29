@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.sovereign.mesh.SovereignApp
+import org.sovereign.mesh.core.completeReset
 import org.sovereign.mesh.core.groupFingerprint
 import org.sovereign.mesh.core.torStatusText
 
@@ -127,8 +128,11 @@ fun SettingsScreen(onBack: () -> Unit, onUpdate: () -> Unit, onIdentityDeleted: 
                     confirmDelete = false
                     // Stopping Tor and deleting its folder can take a moment: not on the UI thread.
                     scope.launch(Dispatchers.IO) {
-                        SovereignApp.deleteIdentity()
-                        scope.launch(Dispatchers.Main) { onIdentityDeleted() }
+                        // Navigates even if a cleanup step failed: the identity is gone either way.
+                        completeReset(
+                            reset = { SovereignApp.deleteIdentity() },
+                            navigate = { scope.launch(Dispatchers.Main) { onIdentityDeleted() } },
+                        )
                     }
                 }) { Text("Delete") }
             },

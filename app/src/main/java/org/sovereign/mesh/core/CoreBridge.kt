@@ -109,6 +109,23 @@ class CoreBridge(
         messenger.wipeAll()
     }
 
+    /**
+     * Ends this core for good: wipes it, then releases the native Messenger. Used when the
+     * identity is deleted, so the old identity, sessions and chats do not wait for the GC.
+     * Any later call on this bridge fails, which is intended.
+     */
+    fun close() = close {}
+
+    /** [afterWipe] runs between the wipe and the release; a test seam to see the wiped state. */
+    internal fun close(afterWipe: () -> Unit) {
+        try {
+            messenger.wipeAll()
+            afterWipe()
+        } finally {
+            messenger.close()
+        }
+    }
+
     /** Whether the OS honoured `mlock` for the core's memory. Counts only, no content. */
     fun lockReport(): LockReport = messenger.lockReport()
 
@@ -202,4 +219,57 @@ class CoreBridge(
      */
     fun sendUpdate(addr: String, timeoutSecs: Int, apk: ByteArray, version: Long, signature: ByteArray) =
         messenger.sendUpdate(addr, timeoutSecs.toUInt(), apk, version.toULong(), signature)
+}
+
+/**
+ * The order of an identity reset, kept apart from the Application so a JVM test can run it.
+ * Background work stops first so nothing races the wipe; the old core is wiped and released
+ * before the vault goes, so no plaintext of the old identity outlives the delete; the new
+ * identity starts last. Returns the first failure, or null. [release] defaults to [CoreBridge.close]; tests observe the wiped core.
+ */
+internal fun resetIdentity(
+    old: CoreBridge,
+    stopConnections: () -> Unit,
+    stopTor: () -> Unit,
+    deleteLocalFiles: () -> Unit,
+    deleteVault: () -> Unit,
+    startNew: () -> Unit,
+    release: (CoreBridge) -> Unit = { it.close() },
+): Throwable? {
+    // Deleting wins over cleanup: every step runs, and the vault is deleted and the new
+    // identity started even if an earlier step throws. The first failure is returned last,
+    // never thrown, so the caller can still navigate. If startNew itself fails, SovereignApp's
+    // core, tor and connections still point at the released core; the vault is already gone,
+    // so the next launch starts clean.
+    var first: Throwable? = null
+    fun guarded(step: () -> Unit) {
+        try {
+            step()
+        } catch (e: Throwable) {
+            if (first == null) first = e
+        }
+    }
+    guarded(stopConnections)
+    guarded(stopTor)
+    guarded(deleteLocalFiles)
+    guarded { release(old) }
+    guarded(deleteVault)
+    guarded(startNew)
+    return first
+}
+
+/**
+ * Runs [reset] and always calls [navigate] afterwards, even if [reset] throws, so the user
+ * never stays on a screen of the identity that was just deleted. Returns whether it was clean.
+ */
+internal fun completeReset(reset: () -> Throwable?, navigate: () -> Unit): Boolean {
+    var failure: Throwable? = null
+    try {
+        failure = reset()
+    } catch (e: Throwable) {
+        failure = e
+    } finally {
+        navigate()
+    }
+    return failure == null
 }

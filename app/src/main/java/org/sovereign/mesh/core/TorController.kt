@@ -74,6 +74,9 @@ class TorController(private val core: CoreBridge, private val stateDir: File) {
                     }
                 } catch (e: FacadeException) {
                     update(TorSnapshot(TorState.FAILED, 0))
+                } catch (e: IllegalStateException) {
+                    // The core was released by an identity delete; stop instead of polling it.
+                    return@launch
                 }
                 delay(POLL_MS)
             }
@@ -88,6 +91,8 @@ class TorController(private val core: CoreBridge, private val stateDir: File) {
             core.stopTor()
         } catch (e: FacadeException) {
             // Nothing to stop.
+        } catch (e: IllegalStateException) {
+            // Core already released.
         }
         snapshot = TorSnapshot(TorState.STOPPED, 0)
         log.clear()
@@ -100,6 +105,8 @@ class TorController(private val core: CoreBridge, private val stateDir: File) {
                 core.acceptTor(ACCEPT_SECONDS)
             } catch (e: FacadeException.TorUnavailable) {
                 return
+            } catch (e: IllegalStateException) {
+                return // Core released by an identity delete.
             } catch (e: FacadeException) {
                 // A timeout with no caller, or a refused or failed handshake: wait again.
                 delay(ACCEPT_RETRY_MS)

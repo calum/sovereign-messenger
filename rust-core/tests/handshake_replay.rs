@@ -3,7 +3,7 @@
 //! handshake replayed against a new challenge must be refused before any session
 //! is stored, so a live session with the same peer is never replaced.
 
-use rust_core::double_ratchet::DoubleRatchet;
+use rust_core::double_ratchet::{DoubleRatchet, Role};
 use rust_core::ffi::{FacadeError, Messenger};
 use rust_core::handshake::{self, Identity};
 use rust_core::wire::{INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
@@ -15,7 +15,7 @@ fn fresh_challenge_initiate_and_respond_derive_the_same_root() {
     let (alice, alice_pub) = Identity::generate();
     let challenge = handshake::new_challenge();
 
-    let (init, root_a) = handshake::initiate(&alice, &bob_pub, &challenge).unwrap();
+    let (init, root_a) = handshake::initiate(&alice, &bob_pub, &challenge.offer()).unwrap();
     // respond verifies the key-confirmation tag before it returns a root.
     let root_b = handshake::respond(&bob, &alice_pub.x25519, &init, &challenge).unwrap();
     assert_eq!(root_a.0, root_b.0);
@@ -69,14 +69,23 @@ fn replayed_handshake_at_the_core_level_is_refused_and_derives_no_matching_root(
     let (alice, alice_pub) = Identity::generate();
 
     let c1 = handshake::new_challenge();
-    let (init1, root1) = handshake::initiate(&alice, &bob_pub, &c1).unwrap();
+    let (init1, root1) = handshake::initiate(&alice, &bob_pub, &c1.offer()).unwrap();
     let root1_b = handshake::respond(&bob, &alice_pub.x25519, &init1, &c1).unwrap();
     assert_eq!(root1.0, root1_b.0);
 
     // Session 1 is live. The replay uses a new challenge.
-    let mut live_send = DoubleRatchet::new(&root1, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
-    let mut live_recv =
-        DoubleRatchet::new(&root1_b, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
+    let mut live_send = DoubleRatchet::new(
+        &root1,
+        Role::Initiator,
+        INITIATOR_TO_RESPONDER,
+        RESPONDER_TO_INITIATOR,
+    );
+    let mut live_recv = DoubleRatchet::new(
+        &root1_b,
+        Role::Responder,
+        RESPONDER_TO_INITIATOR,
+        INITIATOR_TO_RESPONDER,
+    );
     let c2 = handshake::new_challenge();
     assert_eq!(
         handshake::respond(&bob, &alice_pub.x25519, &init1, &c2).err(),
@@ -92,7 +101,7 @@ fn tampered_confirmation_tag_is_refused() {
     let (alice, alice_pub) = Identity::generate();
     let challenge = handshake::new_challenge();
 
-    let (mut init, _) = handshake::initiate(&alice, &bob_pub, &challenge).unwrap();
+    let (mut init, _) = handshake::initiate(&alice, &bob_pub, &challenge.offer()).unwrap();
     init.tag[0] ^= 0x01;
     assert_eq!(
         handshake::respond(&bob, &alice_pub.x25519, &init, &challenge).err(),
@@ -106,9 +115,8 @@ fn tampered_challenge_is_refused() {
     let (alice, alice_pub) = Identity::generate();
     let challenge = handshake::new_challenge();
 
-    let (init, _) = handshake::initiate(&alice, &bob_pub, &challenge).unwrap();
-    let mut other = challenge;
-    other[0] ^= 0x01;
+    let (init, _) = handshake::initiate(&alice, &bob_pub, &challenge.offer()).unwrap();
+    let other = handshake::new_challenge();
     assert_eq!(
         handshake::respond(&bob, &alice_pub.x25519, &init, &other).err(),
         Some(CoreError::Auth)

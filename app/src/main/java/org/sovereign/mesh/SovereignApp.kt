@@ -13,6 +13,7 @@ import kotlinx.coroutines.SupervisorJob
 import org.sovereign.mesh.core.CoreBridge
 import org.sovereign.mesh.core.IdentityVault
 import org.sovereign.mesh.core.initialStack
+import org.sovereign.mesh.core.resetIdentity
 import org.sovereign.mesh.core.PeerConnections
 import org.sovereign.mesh.core.TorController
 import org.sovereign.mesh.core.VaultOpen
@@ -88,15 +89,22 @@ class SovereignApp : Application() {
          * Deletes the stored identity and its Keystore key, then starts with a new
          * identity. Every contact pin is lost and must be paired again in person.
          */
-        fun deleteIdentity() {
+        fun deleteIdentity(): Throwable? {
             // Tor runs under the old identity's onion address, so it stops first. Its folder
             // holds only public directory data and guard state, but it goes with the identity.
-            connections.stop()
-            drafts.clear()
-            tor.stop()
-            torDir.deleteRecursively()
-            vault.delete()
-            start(vault, torDir)
+            // The sequence lives in resetIdentity so a JVM test can run it. The old core is
+            // wiped and released after Tor stops, so its identity and chats do not wait for the GC.
+            return resetIdentity(
+                old = core,
+                stopConnections = { connections.stop() },
+                stopTor = { tor.stop() },
+                deleteLocalFiles = {
+                    drafts.clear()
+                    torDir.deleteRecursively()
+                },
+                deleteVault = { vault.delete() },
+                startNew = { start(vault, torDir) },
+            )
         }
     }
 
