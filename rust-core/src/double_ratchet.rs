@@ -12,9 +12,16 @@
 //! unchanged. A failed open or a failed write changes nothing. Message keys are
 //! used once and zeroized on use, eviction and drop.
 //!
-//! Known limit: if both sides take a DH step before either sees the other's new
-//! key, the two chains diverge. The receiver then refuses with `Auth`, and the
-//! session must be re-handshaken.
+//! Role-based stepping: both sides start with no peer key, so if both stepped
+//! as soon as they saw the first one they could cross and diverge. Only the
+//! initiator therefore becomes `pending` on accepting the peer's first
+//! handshake-chain key. The responder keeps its first ratchet key until the
+//! initiator's first new key arrives. From then on `pending` is set only by
+//! receiving a new key, so steps strictly alternate and cannot cross.
+//! Cost: until the initiator's first step, the responder's messages all carry
+//! its first key, so the first DH-based recovery waits one extra round trip.
+//! Known limit: a handshake-chain message delayed past the peer's first DH step
+//! is refused.
 
 use hkdf::Hkdf;
 use rand_core::OsRng;
@@ -78,10 +85,18 @@ pub fn header_from_bytes(bytes: &[u8]) -> Result<Header, CoreError> {
     })
 }
 
+/// Which side of the handshake this ratchet belongs to. Decides who steps first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Initiator,
+    Responder,
+}
+
 /// One peer's view of a conversation. Both directions share this state, because
 /// a DH step on one direction changes the keys used by the other.
 pub struct DoubleRatchet {
     root: Key32,
+    role: Role,
     /// Our current ratchet secret. Replaced on our next send after a peer key arrives.
     dh_self: StaticSecret,
     /// The peer's most recent ratchet public key, if one has arrived.
@@ -105,11 +120,12 @@ struct Staged {
 }
 
 impl DoubleRatchet {
-    /// `send_label` and `recv_label` name the two directions, so each side sends on
+    /// `role` breaks the symmetry of the first step. `send_label` and `recv_label` name the two directions, so each side sends on
     /// the chain the other receives on.
-    pub fn new(root: &Key32, send_label: &[u8], recv_label: &[u8]) -> Self {
+    pub fn new(root: &Key32, role: Role, send_label: &[u8], recv_label: &[u8]) -> Self {
         Self {
             root: Key32(root.0),
+            role,
             dh_self: StaticSecret::random_from_rng(OsRng),
             dh_peer: None,
             pending: false,
@@ -237,7 +253,9 @@ impl DoubleRatchet {
         };
         if self.dh_peer.is_none() {
             self.dh_peer = Some(h.dh);
-            self.pending = true;
+            // Only the initiator steps next; the responder waits for the
+            // initiator's new key, so the two first steps cannot cross.
+            self.pending = self.role == Role::Initiator;
         }
         self.skipped.insert_all(h.dh, skipped);
         Ok(plaintext)
@@ -326,8 +344,8 @@ mod tests {
     fn pair() -> (DoubleRatchet, DoubleRatchet) {
         let root = Key32([4u8; 32]);
         (
-            DoubleRatchet::new(&root, I2R, R2I),
-            DoubleRatchet::new(&root, R2I, I2R),
+            DoubleRatchet::new(&root, Role::Initiator, I2R, R2I),
+            DoubleRatchet::new(&root, Role::Responder, R2I, I2R),
         )
     }
 
@@ -369,6 +387,27 @@ mod tests {
         let second = a.seal(b"y").unwrap();
         assert_eq!(b.open(&second).unwrap(), b"y".to_vec());
         assert_eq!(b.open(&first).unwrap(), b"x".to_vec());
+    }
+
+    #[test]
+    fn responder_keeps_its_first_key_until_the_initiators_new_key_arrives() {
+        let (mut a, mut b) = pair();
+        let t1 = a.seal(b"t1").unwrap();
+        b.open(&t1).unwrap();
+        // The responder is not pending: two sends share one key.
+        let r1 = b.seal(b"r1").unwrap();
+        let r2 = b.seal(b"r2").unwrap();
+        assert_eq!(r1.header.dh, r2.header.dh);
+        // The initiator is pending, so its next send carries a new key.
+        a.open(&r1).unwrap();
+        let t2 = a.seal(b"t2").unwrap();
+        assert_ne!(t2.header.dh, t1.header.dh);
+        b.open(&t2).unwrap();
+        a.open(&r2).unwrap();
+        // Now the responder steps.
+        let r3 = b.seal(b"r3").unwrap();
+        assert_ne!(r3.header.dh, r1.header.dh);
+        assert_eq!(a.open(&r3).unwrap(), b"r3".to_vec());
     }
 
     #[test]
@@ -488,8 +527,8 @@ mod tests {
 
     #[test]
     fn wrong_root_key_fails_authentication_on_the_first_message() {
-        let mut a = DoubleRatchet::new(&Key32([1u8; 32]), I2R, R2I);
-        let mut b = DoubleRatchet::new(&Key32([2u8; 32]), R2I, I2R);
+        let mut a = DoubleRatchet::new(&Key32([1u8; 32]), Role::Initiator, I2R, R2I);
+        let mut b = DoubleRatchet::new(&Key32([2u8; 32]), Role::Responder, R2I, I2R);
         let m = a.seal(b"hello").unwrap();
         assert_eq!(b.open(&m), Err(CoreError::Auth));
     }

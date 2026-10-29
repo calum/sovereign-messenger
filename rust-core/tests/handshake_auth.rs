@@ -3,7 +3,7 @@
 //! static keys feed the root through a static-static DH, so a wrong static key
 //! on either side gives a different root and the first message does not open.
 
-use rust_core::double_ratchet::DoubleRatchet;
+use rust_core::double_ratchet::{DoubleRatchet, Role};
 use rust_core::ffi::{FacadeError, Messenger};
 use rust_core::handshake::{self, Identity};
 use rust_core::wire::{self, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
@@ -26,8 +26,18 @@ fn pinned_initiator_and_responder_derive_the_same_root_and_exchange_a_message() 
     let root_b = handshake::respond(&bob, &alice_pub.x25519, &init, &CH).unwrap();
     assert_eq!(root_a.0, root_b.0);
 
-    let mut send = DoubleRatchet::new(&root_a, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
-    let mut recv = DoubleRatchet::new(&root_b, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
+    let mut send = DoubleRatchet::new(
+        &root_a,
+        Role::Initiator,
+        INITIATOR_TO_RESPONDER,
+        RESPONDER_TO_INITIATOR,
+    );
+    let mut recv = DoubleRatchet::new(
+        &root_b,
+        Role::Responder,
+        RESPONDER_TO_INITIATOR,
+        INITIATOR_TO_RESPONDER,
+    );
     let msg = send.seal(b"hello bob").unwrap();
     assert_eq!(recv.open(&msg).unwrap(), b"hello bob".to_vec());
 }

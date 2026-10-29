@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use rust_core::double_ratchet::DoubleRatchet;
+use rust_core::double_ratchet::{DoubleRatchet, Role};
 use rust_core::secret::Key32;
 use rust_core::transport::{Transport, TransportError};
 use rust_core::wire::{self, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
@@ -49,8 +49,18 @@ impl Transport for Pipe {
 #[test]
 fn failed_write_does_not_advance_the_counter() {
     let root = Key32([7u8; 32]);
-    let mut send = DoubleRatchet::new(&root, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
-    let mut recv = DoubleRatchet::new(&root, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
+    let mut send = DoubleRatchet::new(
+        &root,
+        Role::Initiator,
+        INITIATOR_TO_RESPONDER,
+        RESPONDER_TO_INITIATOR,
+    );
+    let mut recv = DoubleRatchet::new(
+        &root,
+        Role::Responder,
+        RESPONDER_TO_INITIATOR,
+        INITIATOR_TO_RESPONDER,
+    );
     let link = Pipe::failing(1);
 
     assert_eq!(
@@ -69,8 +79,18 @@ fn failed_write_does_not_advance_the_counter() {
 #[test]
 fn failed_write_in_the_middle_of_a_conversation_keeps_the_chain_in_step() {
     let root = Key32([7u8; 32]);
-    let mut send = DoubleRatchet::new(&root, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
-    let mut recv = DoubleRatchet::new(&root, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
+    let mut send = DoubleRatchet::new(
+        &root,
+        Role::Initiator,
+        INITIATOR_TO_RESPONDER,
+        RESPONDER_TO_INITIATOR,
+    );
+    let mut recv = DoubleRatchet::new(
+        &root,
+        Role::Responder,
+        RESPONDER_TO_INITIATOR,
+        INITIATOR_TO_RESPONDER,
+    );
     let link = Pipe::failing(0);
 
     wire::send_message(&link, &mut send, b"one").unwrap();

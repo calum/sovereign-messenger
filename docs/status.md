@@ -26,7 +26,7 @@ Be skeptical of every claim here until it has been tested and reviewed.
 - The initiator is authenticated by the responder's pin (static-static DH, PLAN.md, Decisions, 2026-10-24). Both phones must scan each other's QR code first. This is tested in Rust but not independently reviewed. The responder sends a fresh challenge and the initiator proves it with a confirmation tag, so a captured handshake does not replace a live session.
 - The app has been installed and started on one phone (owner report). The camera scanner, the Keystore vault, Tor on Android and the chat screen have not been checked there.
 - APK transfer over local Wi-Fi is written but has not run between two phones, and no developer signing key is compiled in, so no update installs. The ephemeral handshake key is not in the QR code yet (see PLAN section 2).
-- The DH ratchet step is the standard Double Ratchet construction, tested in Rust, but it has not been independently reviewed. If both sides take a DH step before either sees the other's new key, the session desynchronises and must be re-handshaken.
+- The DH ratchet step is the standard Double Ratchet construction, tested in Rust, but it has not been independently reviewed. Only the handshake initiator takes the first DH step, so the two sides can no longer step at the same time (role-based stepping, PLAN.md Decisions 2026-10-29); the cost is that the responder's first DH recovery waits one extra round trip.
 - Nothing here has been independently reviewed. The cryptography uses third-party crates (`ml-kem`, `x25519-dalek`, `ed25519-dalek`, `chacha20poly1305`, `hkdf`) that have not been audited as part of this project.
 
 ## Security status

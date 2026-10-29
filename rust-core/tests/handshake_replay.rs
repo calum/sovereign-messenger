@@ -3,7 +3,7 @@
 //! handshake replayed against a new challenge must be refused before any session
 //! is stored, so a live session with the same peer is never replaced.
 
-use rust_core::double_ratchet::DoubleRatchet;
+use rust_core::double_ratchet::{DoubleRatchet, Role};
 use rust_core::ffi::{FacadeError, Messenger};
 use rust_core::handshake::{self, Identity};
 use rust_core::wire::{INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR};
@@ -74,9 +74,18 @@ fn replayed_handshake_at_the_core_level_is_refused_and_derives_no_matching_root(
     assert_eq!(root1.0, root1_b.0);
 
     // Session 1 is live. The replay uses a new challenge.
-    let mut live_send = DoubleRatchet::new(&root1, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
-    let mut live_recv =
-        DoubleRatchet::new(&root1_b, RESPONDER_TO_INITIATOR, INITIATOR_TO_RESPONDER);
+    let mut live_send = DoubleRatchet::new(
+        &root1,
+        Role::Initiator,
+        INITIATOR_TO_RESPONDER,
+        RESPONDER_TO_INITIATOR,
+    );
+    let mut live_recv = DoubleRatchet::new(
+        &root1_b,
+        Role::Responder,
+        RESPONDER_TO_INITIATOR,
+        INITIATOR_TO_RESPONDER,
+    );
     let c2 = handshake::new_challenge();
     assert_eq!(
         handshake::respond(&bob, &alice_pub.x25519, &init1, &c2).err(),

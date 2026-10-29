@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zeroize::Zeroizing;
 
 use crate::apk_transfer;
-use crate::double_ratchet::{DoubleRatchet, Header, Message};
+use crate::double_ratchet::{DoubleRatchet, Header, Message, Role};
 use crate::envelope::{self, Envelope};
 use crate::error::CoreError;
 use crate::handshake::{self, Identity, IdentityPublic, CHALLENGE_LEN};
@@ -466,6 +466,7 @@ impl Messenger {
             peer_id,
             Arc::new(session_for(
                 &root,
+                Role::Initiator,
                 INITIATOR_TO_RESPONDER,
                 RESPONDER_TO_INITIATOR,
                 None,
@@ -509,6 +510,7 @@ impl Messenger {
             peer_id,
             Arc::new(session_for(
                 &root,
+                Role::Responder,
                 RESPONDER_TO_INITIATOR,
                 INITIATOR_TO_RESPONDER,
                 None,
@@ -1200,6 +1202,7 @@ impl Messenger {
         wire::send_handshake(link.as_ref(), &init)?;
         let session = session_for(
             &root,
+            Role::Initiator,
             INITIATOR_TO_RESPONDER,
             RESPONDER_TO_INITIATOR,
             Some(link),
@@ -1239,6 +1242,7 @@ impl Messenger {
         let root = handshake::respond(&st.identity, &pinned, &init, &challenge)?;
         let session = session_for(
             &root,
+            Role::Responder,
             RESPONDER_TO_INITIATOR,
             INITIATOR_TO_RESPONDER,
             Some(link),
@@ -1305,12 +1309,13 @@ fn wire_from_message(msg: Message) -> WireMessage {
 
 fn session_for(
     root: &Key32,
+    role: Role,
     send_label: &[u8],
     recv_label: &[u8],
     link: Option<Arc<dyn Transport>>,
 ) -> Session {
     Session {
-        ratchet: Mutex::new(DoubleRatchet::new(root, send_label, recv_label)),
+        ratchet: Mutex::new(DoubleRatchet::new(root, role, send_label, recv_label)),
         link,
         dead: AtomicBool::new(false),
     }

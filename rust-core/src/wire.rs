@@ -211,6 +211,7 @@ fn map_transport(e: TransportError) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::double_ratchet::Role;
     use crate::handshake::{initiate, Identity};
     use crate::secret::Key32;
 
@@ -298,7 +299,12 @@ mod tests {
     #[test]
     fn message_frame_round_trips() {
         let root = Key32([3u8; 32]);
-        let mut send = DoubleRatchet::new(&root, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
+        let mut send = DoubleRatchet::new(
+            &root,
+            Role::Initiator,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+        );
         let sealed = send.seal(b"payload").unwrap();
         let back = decode_message(&encode_message(&sealed)).unwrap();
         assert_eq!(back.header, sealed.header);
@@ -308,7 +314,12 @@ mod tests {
     #[test]
     fn message_frame_with_unknown_version_is_refused() {
         let root = Key32([3u8; 32]);
-        let mut send = DoubleRatchet::new(&root, INITIATOR_TO_RESPONDER, RESPONDER_TO_INITIATOR);
+        let mut send = DoubleRatchet::new(
+            &root,
+            Role::Initiator,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+        );
         let mut frame = encode_message(&send.seal(b"payload").unwrap());
         frame[1] = crate::double_ratchet::RATCHET_VERSION + 1;
         assert!(matches!(decode_message(&frame), Err(CoreError::Malformed)));
