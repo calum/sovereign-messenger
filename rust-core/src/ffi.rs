@@ -223,6 +223,9 @@ struct Session {
     epoch: Instant,
     last_rx_ms: AtomicU64,
     last_tx_ms: AtomicU64,
+    /// When `receive_from_peer` was last entered. A gap longer than `ping_after` means the
+    /// process was frozen (suspend, Doze), not that the peer went quiet.
+    last_poll_ms: AtomicU64,
     /// Quiet send time before a ping, and quiet receive time before the link is declared
     /// dead. Fields, not bare consts, so tests can shorten them without public API.
     ping_after: Duration,
@@ -235,6 +238,18 @@ impl Session {
     }
     fn note_rx(&self) {
         self.last_rx_ms.store(self.mono_ms(), Ordering::Relaxed);
+    }
+    /// Records a poll and returns how long it has been since the previous one.
+    fn note_poll(&self) -> Duration {
+        let now = self.mono_ms();
+        let prev = self.last_poll_ms.swap(now, Ordering::Relaxed);
+        Duration::from_millis(now.saturating_sub(prev))
+    }
+    /// Marks the session dead and closes its link, taking no lock, so it is safe under the
+    /// ratchet lock. Closing makes the peer's next read fail, so it redials too.
+    fn kill(&self, link: &Arc<dyn Transport>) {
+        self.dead.store(true, Ordering::Relaxed);
+        link.close();
     }
     fn note_tx(&self) {
         self.last_tx_ms.store(self.mono_ms(), Ordering::Relaxed);
@@ -895,6 +910,11 @@ impl Messenger {
     pub fn receive_from_peer(&self, peer_id: String) -> Result<bool, FacadeError> {
         let session = self.session(&peer_id)?;
         let link = live_link(&session).ok_or(FacadeError::NoLink)?;
+        // A long gap between polls means this process was frozen, so the quiet it saw is
+        // not evidence against the peer: give the link a fresh window before judging it.
+        if session.note_poll() > session.ping_after {
+            session.note_rx();
+        }
         // The socket wait happens without the ratchet lock, so a send is not stalled.
         let frame = match wire::receive_frame(link.as_ref()) {
             Ok(Some(frame)) => frame,
@@ -1183,7 +1203,9 @@ impl Messenger {
     ) -> Result<(), FacadeError> {
         wire::send_message(link.as_ref(), ratchet, plain).map_err(|e| {
             if e == CoreError::Network {
-                session.dead.store(true, Ordering::Relaxed);
+                // Close as well as flag: a Wait-role link would otherwise stay open.
+                // `kill` takes no lock; last_seen is left to the next poll's mark_dead.
+                session.kill(link);
             }
             FacadeError::from(e)
         })?;
@@ -1224,7 +1246,7 @@ impl Messenger {
         // Chains are per direction: without this a peer whose own receives still open would
         // keep sending into a socket nobody reads.
         if let Some(link) = &session.link {
-            link.close();
+            session.kill(link);
         }
         if let Ok(mut st) = self.lock() {
             st.last_seen.insert(peer_id.to_owned(), now_ms());
@@ -1425,6 +1447,7 @@ fn session_for(
         epoch: Instant::now(),
         last_rx_ms: AtomicU64::new(0),
         last_tx_ms: AtomicU64::new(0),
+        last_poll_ms: AtomicU64::new(0),
         ping_after: PING_AFTER,
         dead_after: DEAD_AFTER,
     }
@@ -1705,6 +1728,10 @@ mod liveness_tests {
         wire::encode_message(&sender.seal(plain).unwrap())
     }
 
+    /// Deadline for a condition that must happen; far above the timing under test so a
+    /// loaded 2-vCPU CI runner does not turn it into a flake.
+    const GENEROUS: Duration = Duration::from_secs(10);
+
     fn set_timing(m: &Messenger, peer: &str, ping_after: Duration, dead_after: Duration) {
         let mut st = m.lock().unwrap();
         let s = Arc::get_mut(st.sessions.get_mut(peer).unwrap()).unwrap();
@@ -1718,10 +1745,10 @@ mod liveness_tests {
         let start = Instant::now();
         let link = Scripted::new();
         let (bob, _sender) = bob_with(link.clone());
-        let (ping, dead) = (Duration::from_millis(40), Duration::from_millis(200));
+        let (ping, dead) = (Duration::from_millis(100), Duration::from_millis(1500));
         set_timing(&bob, "a", ping, dead);
         while !bob.linked_peers().unwrap().is_empty() {
-            assert!(start.elapsed() < dead * 5, "silent peer never detected");
+            assert!(start.elapsed() < GENEROUS, "silent peer never detected");
             assert_eq!(bob.receive_from_peer("a".into()), Ok(false));
         }
         assert!(start.elapsed() >= dead, "declared dead too early");
@@ -1804,11 +1831,11 @@ mod liveness_tests {
     #[test]
     fn an_idle_but_alive_pair_never_dies_and_traffic_still_flows() {
         let (a, b) = connected_pair();
-        let (ping, dead) = (Duration::from_millis(50), Duration::from_millis(250));
+        let (ping, dead) = (Duration::from_millis(100), Duration::from_millis(1500));
         set_timing(&a, "b", ping, dead);
         set_timing(&b, "a", ping, dead);
-        // Idle for twelve ping periods and more than two dead bounds.
-        run_loops(&a, &b, Duration::from_millis(600));
+        // Idle for 25 ping periods and well over one dead bound.
+        run_loops(&a, &b, Duration::from_millis(2500));
         assert_eq!(a.linked_peers().unwrap(), vec!["b"]);
         assert_eq!(b.linked_peers().unwrap(), vec!["a"]);
         // Pings left no trace in either conversation.
@@ -1826,15 +1853,95 @@ mod liveness_tests {
     fn a_peer_that_stops_answering_is_dropped_by_the_other_side() {
         let start = Instant::now();
         let (a, b) = connected_pair();
-        let (ping, dead) = (Duration::from_millis(50), Duration::from_millis(250));
+        let (ping, dead) = (Duration::from_millis(100), Duration::from_millis(1500));
         set_timing(&a, "b", ping, dead);
         set_timing(&b, "a", ping, dead);
         // Only a polls; b is half-open (its socket is up but nothing is processed).
         while !a.linked_peers().unwrap().is_empty() {
-            assert!(start.elapsed() < dead * 5, "half-open link never detected");
+            assert!(start.elapsed() < GENEROUS, "half-open link never detected");
             let _ = a.receive_from_peer("b".into());
         }
         assert!(start.elapsed() >= dead);
         drop(b);
+    }
+
+    #[test]
+    fn a_failed_send_marks_the_session_dead_and_closes_the_link() {
+        // Alice's end of a pair; Bob's end is dropped, so her send hits a closed channel.
+        let (x, y) = chan_pair();
+        let root = Key32([9u8; 32]);
+        let session = session_for(
+            &root,
+            Role::Initiator,
+            INITIATOR_TO_RESPONDER,
+            RESPONDER_TO_INITIATOR,
+            Some(x.clone() as Arc<dyn Transport>),
+        );
+        let alice = Messenger::new();
+        alice
+            .lock()
+            .unwrap()
+            .sessions
+            .insert("b".into(), Arc::new(session));
+        drop(y);
+        let s = alice.session("b").unwrap();
+        let link: Arc<dyn Transport> = x;
+        assert!(alice.send_sealed(&s, &link, b"x").is_err());
+        assert!(s.dead.load(Ordering::Relaxed));
+        assert!(alice.linked_peers().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_failed_send_closes_the_link_so_the_peer_sees_the_drop() {
+        let link = FailingSend::new();
+        let (bob, _sender) = bob_with(link.clone());
+        let s = bob.session("a").unwrap();
+        let l: Arc<dyn Transport> = link.clone();
+        assert!(bob.send_sealed(&s, &l, b"x").is_err());
+        assert!(s.dead.load(Ordering::SeqCst));
+        assert!(link.closed.load(Ordering::SeqCst), "link left open");
+    }
+
+    /// A link whose sends fail with a network error and which records a close.
+    struct FailingSend {
+        closed: AtomicBool,
+    }
+
+    impl FailingSend {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                closed: AtomicBool::new(false),
+            })
+        }
+    }
+
+    impl Transport for FailingSend {
+        fn send(&self, _frame: &[u8]) -> Result<(), TransportError> {
+            Err(TransportError::Closed)
+        }
+        fn receive(&self) -> Result<Option<Vec<u8>>, TransportError> {
+            Ok(None)
+        }
+        fn close(&self) {
+            self.closed.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_frozen_process_does_not_kill_a_healthy_session_on_its_first_poll() {
+        let link = Scripted::new();
+        let (bob, _sender) = bob_with(link.clone());
+        let (ping, dead) = (Duration::from_millis(50), Duration::from_millis(300));
+        set_timing(&bob, "a", ping, dead);
+        assert_eq!(bob.receive_from_peer("a".into()), Ok(false));
+        // The process is frozen for longer than the dead bound, then resumes.
+        std::thread::sleep(dead + Duration::from_millis(100));
+        assert_eq!(bob.receive_from_peer("a".into()), Ok(false));
+        assert_eq!(
+            bob.linked_peers().unwrap(),
+            vec!["a"],
+            "a frozen process killed a healthy session"
+        );
+        assert!(!link.closed.load(Ordering::SeqCst));
     }
 }
