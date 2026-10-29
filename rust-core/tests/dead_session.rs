@@ -53,9 +53,20 @@ fn relay_once(bob_addr: String, corrupt: Arc<AtomicU32>) -> String {
             if from_alice.read_exact(&mut body).is_err() {
                 break;
             }
-            let flip = corrupt
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| c.checked_sub(1))
-                .is_ok();
+            // A compare-exchange loop, not `fetch_update`: newer toolchains deprecate that name
+            // (renamed `try_update`), older ones lack the new one, and CI runs `-D warnings`.
+            let flip = loop {
+                let left = corrupt.load(Ordering::SeqCst);
+                if left == 0 {
+                    break false;
+                }
+                if corrupt
+                    .compare_exchange(left, left - 1, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    break true;
+                }
+            };
             if flip {
                 *body.last_mut().unwrap() ^= 0x55;
             }
