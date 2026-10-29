@@ -62,7 +62,35 @@ class IdentityResetTest {
     @Test
     fun defaultReleaseWipesAndClosesTheOldCore() {
         val old = bobWithChat()
-        resetIdentity(old, {}, {}, {}, {}, {})
+        assertEquals(listOf("alice"), old.peers())
+        var peersAfterWipe: List<String>? = null
+        resetIdentity(old, {}, {}, {}, {}, {}, release = { it.close { peersAfterWipe = it.peers() } })
+        assertEquals(emptyList<String>(), peersAfterWipe)
         assertThrows(IllegalStateException::class.java) { old.history("alice") }
+    }
+
+    @Test
+    fun deleteAndStartStillRunWhenEarlierStepsThrow() {
+        val old = bobWithChat()
+        val oldFingerprint = old.ownFingerprint()
+        val steps = mutableListOf<String>()
+        var fresh: CoreBridge? = null
+        val failure = assertThrows(RuntimeException::class.java) {
+            resetIdentity(
+                old = old,
+                stopConnections = { steps += "connections" },
+                stopTor = { throw RuntimeException("tor") },
+                deleteLocalFiles = { steps += "files" },
+                deleteVault = { steps += "vault" },
+                startNew = {
+                    steps += "start"
+                    fresh = CoreBridge(Messenger())
+                },
+                release = { throw RuntimeException("wipe") },
+            )
+        }
+        assertEquals("tor", failure.message)
+        assertEquals(listOf("connections", "files", "vault", "start"), steps)
+        assertNotEquals(oldFingerprint, fresh!!.ownFingerprint())
     }
 }

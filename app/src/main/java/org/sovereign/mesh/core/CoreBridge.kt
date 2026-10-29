@@ -114,9 +114,16 @@ class CoreBridge(
      * identity is deleted, so the old identity, sessions and chats do not wait for the GC.
      * Any later call on this bridge fails, which is intended.
      */
-    fun close() {
-        messenger.wipeAll()
-        messenger.close()
+    fun close() = close {}
+
+    /** [afterWipe] runs between the wipe and the release; a test seam to see the wiped state. */
+    internal fun close(afterWipe: () -> Unit) {
+        try {
+            messenger.wipeAll()
+            afterWipe()
+        } finally {
+            messenger.close()
+        }
     }
 
     /** Whether the OS honoured `mlock` for the core's memory. Counts only, no content. */
@@ -229,10 +236,21 @@ internal fun resetIdentity(
     startNew: () -> Unit,
     release: (CoreBridge) -> Unit = { it.close() },
 ) {
-    stopConnections()
-    stopTor()
-    deleteLocalFiles()
-    release(old)
-    deleteVault()
-    startNew()
+    // Deleting wins over cleanup: every step runs, and the vault is deleted and the new
+    // identity started even if an earlier step throws. The first failure is rethrown last.
+    var first: Throwable? = null
+    fun guarded(step: () -> Unit) {
+        try {
+            step()
+        } catch (e: Exception) {
+            if (first == null) first = e
+        }
+    }
+    guarded(stopConnections)
+    guarded(stopTor)
+    guarded(deleteLocalFiles)
+    guarded { release(old) }
+    guarded(deleteVault)
+    guarded(startNew)
+    first?.let { throw it }
 }
