@@ -112,7 +112,7 @@ fun CrashReportScreen(report: String, headline: String, onDone: () -> Unit, done
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(headline, style = MaterialTheme.typography.titleLarge)
         Text(
-            "Please send this to the developer. It lists the error and the phone model, and holds no messages or keys.",
+            "Please send this to the developer. It lists the error type, where it happened in the code, and the phone model. No messages or keys are included.",
             style = MaterialTheme.typography.bodyMedium,
         )
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {

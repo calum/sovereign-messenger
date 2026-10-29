@@ -14,7 +14,8 @@ class CrashReportTest {
         val report = CrashReport.forThrowable("main", error, env)
         assertTrue(report.contains(env))
         assertTrue(report.contains("Thread: main"))
-        assertTrue(report.contains("java.lang.IllegalStateException: outer"))
+        assertTrue(report.contains("java.lang.IllegalStateException\n")) // message withheld: not on the allow-list
+        assertFalse(report.contains("outer"))
         assertTrue(report.contains("Caused by: java.lang.UnsatisfiedLinkError: dlopen failed: librust_core.so"))
         assertTrue(report.contains("    at "))
     }
@@ -38,7 +39,7 @@ class CrashReportTest {
         val b = RuntimeException("b", a)
         a.initCause(b)
         val report = CrashReport.forThrowable("t", a, env)
-        assertEquals(1, Regex("Caused by: java.lang.RuntimeException: b").findAll(report).count())
+        assertEquals(1, Regex("Caused by: java.lang.RuntimeException\n").findAll(report).count())
     }
 
     @Test
@@ -53,5 +54,29 @@ class CrashReportTest {
         val report = CrashReport.forEarlierExit("Android recorded a native crash (signal or status 11): SIGSEGV", env)
         assertTrue(report.contains(env))
         assertTrue(report.contains("SIGSEGV"))
+    }
+
+    private val chat = "meet me at the old bridge at nine"
+
+    @Test
+    fun aMessageBuiltFromChatTextIsLeftOut() {
+        val report = CrashReport.forThrowable("t", NumberFormatException("For input string: \"$chat\""), env)
+        assertFalse(report.contains(chat))
+        assertTrue(report.contains("java.lang.NumberFormatException\n"))
+    }
+
+    @Test
+    fun chatTextInANestedCauseIsLeftOut() {
+        val inner = NumberFormatException("For input string: \"$chat\"")
+        val report = CrashReport.forThrowable("t", RuntimeException("wrapped $chat", IllegalStateException(chat, inner)), env)
+        assertFalse(report.contains(chat))
+        assertTrue(report.contains("Caused by: java.lang.NumberFormatException\n"))
+    }
+
+    @Test
+    fun aCoreErrorMessageIsStillShown() {
+        // The core's errors carry fixed strings only, so their text stays useful in a report.
+        val report = CrashReport.forThrowable("t", uniffi.rust_core.FacadeException.Malformed("peer not found"), env)
+        assertTrue(report.contains("peer not found"))
     }
 }
