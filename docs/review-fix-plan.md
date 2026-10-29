@@ -3,6 +3,14 @@
 Source: the full review of main at `d822ed2` (2026-10-29). Finding numbers (1, 2.1 to 2.9, D) match that review.
 Nothing here is done yet. Tick a box only when the task's acceptance checks have been run and passed.
 
+## Owner decisions (2026-10-29)
+
+- **T1:** role-based stepping. Approved.
+- **T7:** add a responder ephemeral key to the handshake (wire change). Approved.
+- **T9:** add the liveness ping. Approved.
+- **T10:** dropped. Keep the current behaviour (contacts connect right after the scan). Finding 2.7 is accepted and only documented in `docs/status.md`.
+- **T12:** CI runs the Rust checks only, including the Tor feature. No Android build in CI yet.
+
 ## How the work is run
 
 One orchestrator (the main session) owns the plan, the branch and the merges. It never writes fix code itself. Every task goes to a fresh **implementer** subagent, then to a separate **reviewer** subagent. The reviewer gets the diff and the finding, not the implementer's summary or conclusion.
@@ -27,7 +35,7 @@ Rules for every task:
 
 ## Wave 1: correctness (blocks everything else)
 
-### T1. Ratchet desync when both sides send at once (finding 1) [OWNER sign-off on the design]
+### T1. Ratchet desync when both sides send at once (finding 1) [design approved: role-based stepping]
 
 **Files:** `rust-core/src/double_ratchet.rs`, `rust-core/src/ffi.rs` (`session_for` and its two callers), `rust-core/tests/ratchet_crossing.rs`, `PLAN.md`.
 
@@ -67,8 +75,8 @@ Depends on T1 (shares `ffi.rs`). **Files:** `rust-core/src/ffi.rs`, `app/.../cor
 
 ## Wave 3: core hygiene in `ffi.rs` (serialised, after T2)
 
-### T7. Handshake forward secrecy against later key compromise (finding 2.1) [OWNER]
-Proposal first, no code until approved. The responder's challenge frame carries a fresh responder ephemeral X25519 key; the initiator adds `DH(eph_i, eph_r)` to the HKDF input, so a stolen long-term key no longer opens recorded sessions. This changes the wire (the challenge frame grows from 33 to 65 bytes) and the HKDF input, so it needs a new `v2` label, a `PLAN.md` Decisions entry and updated frame docs. If the owner declines, the fallback is documentation only: state the limit in `docs/status.md` and the security table. **Acceptance if approved:** both sides agree on the root; a recorded handshake does not yield the root from the responder's long-term keys alone (test with the static secrets known); replay and wrong-challenge tests still refuse; the frame-length tests are updated.
+### T7. Handshake forward secrecy against later key compromise (finding 2.1) [approved]
+The implementer writes the exact frame and HKDF layout into `PLAN.md` Decisions before coding. The responder's challenge frame carries a fresh responder ephemeral X25519 key; the initiator adds `DH(eph_i, eph_r)` to the HKDF input, so a stolen long-term key no longer opens recorded sessions. This changes the wire (the challenge frame grows from 33 to 65 bytes) and the HKDF input, so it needs a new `v2` label, a `PLAN.md` Decisions entry and updated frame docs. If the owner declines, the fallback is documentation only: state the limit in `docs/status.md` and the security table. **Acceptance if approved:** both sides agree on the root; a recorded handshake does not yield the root from the responder's long-term keys alone (test with the static secrets known); replay and wrong-challenge tests still refuse; the frame-length tests are updated.
 
 ### T8. Per-peer state hygiene and lock scope (findings 2.5 and 2.9)
 **Files:** `rust-core/src/ffi.rs`, tests. Clear `read_owed` and `last_seen` in `forget`, `unpin` and `wipe_all`. In `flush_pending`, do not hold the ratchet lock across the blocking write: seal under the lock, send outside it, commit after (keep the "state advances only after a successful write" rule). **Acceptance:** a test that a read receipt owed before `forget` is not sent into a new session; a test that a receive is processed while a send is blocked on a slow transport.
@@ -78,7 +86,9 @@ Proposal first, no code until approved. The responder's challenge frame carries 
 
 ## Wave 4: pairing flow (finding 2.7)
 
-### T10. Do not go live before the fingerprints are compared [OWNER on the wording]
+### T10. DROPPED by the owner (finding 2.7 stays as is)
+
+Original proposal, kept for the record:
 **Files:** `app/.../ui/PairingScreen.kt`, `PeerConnections.kt`, `CoreBridge.kt`, tests. Keep the contact pinned but hold dialling and accepting until the user confirms the fingerprint match on the result step (state kept in RAM only). "They do not match" removes the contact. **Acceptance:** a JVM test that a freshly pinned contact is not dialled until confirmed; after confirmation the loop starts; the confirmed flag is not persisted (rule 1).
 
 ## Wave 5: docs and process (finding D)
@@ -86,8 +96,8 @@ Proposal first, no code until approved. The responder's challenge frame carries 
 ### T11. Make the docs match the code
 **Files:** `docs/hardening-review.md` (close F2 with a pointer to the 2026-10-24/25 decisions), `docs/status.md` (updates feature exists but is disabled with no key; identity deletion is in Settings; new ratchet rule; handshake limit or T7; test counts), `app/.../core/Navigation.kt` (stale `rememberSaveable` comment), `README.md` if a claim changes. **Acceptance:** a reviewer cross-checks each changed sentence against the code and finds no claim the code does not back.
 
-### T12. Add CI
-**Files:** `.github/workflows/ci.yml`. Run `cargo fmt --check`, clippy `-D warnings`, `cargo test`, and the Tor-feature lint and test on every push and PR. Android build and JVM tests are added once the runner has the SDK and NDK. **Acceptance:** the workflow is green on the PR that adds it. No secrets, no release steps (only the owner publishes releases).
+### T12. Add CI (Rust checks only)
+**Files:** `.github/workflows/ci.yml`. Run `cargo fmt --check`, clippy `-D warnings`, `cargo test`, and the Tor-feature lint and test on every push and PR. No Android build. **Acceptance:** the workflow is green on the PR that adds it. No secrets, no release steps (only the owner publishes releases).
 
 ## Order and parallelism
 
@@ -106,5 +116,5 @@ T3, T4, T5 and T6 start as soon as Wave 0 is done, in parallel with T1, because 
 - Rust fmt, clippy and tests are green, including the Tor feature; the Kotlin build and JVM tests are green on the owner's machine.
 - The crossing-messages regression test passes and stays in the suite.
 - `PLAN.md` Decisions lists every behaviour change; `docs/status.md` makes no claim the code does not back.
-- Owner-decision tasks (T1, T7, T10) each have a recorded decision.
+- Owner decisions are recorded above; T10 is dropped.
 - Still **not** verified by this plan: anything on a real phone or between two phones, and independent cryptography review. Those stay on `docs/owner-test-list.md`.
