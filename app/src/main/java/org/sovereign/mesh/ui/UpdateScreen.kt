@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -104,15 +105,15 @@ fun UpdateScreen(onBack: () -> Unit) {
         onDispose { UpdateInstaller.deleteStaged(context) }
     }
 
+    Scaffold(topBar = { ScreenBar(onBack = onBack, title = { BarTitle("Updates") }) }) { padding ->
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(padding)
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Button(onClick = onBack) { Text("Back") }
-        Text("Updates", style = MaterialTheme.typography.titleLarge)
 
         Text("Installed version: $installedName", style = MaterialTheme.typography.bodyMedium)
         Text(
@@ -275,6 +276,7 @@ fun UpdateScreen(onBack: () -> Unit) {
             )
             is SendState.Failed -> Text(s.text, style = MaterialTheme.typography.bodyMedium)
         }
+    }
     }
 }
 

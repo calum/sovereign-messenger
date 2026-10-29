@@ -107,7 +107,9 @@ fn two_identities_message_each_other_over_tor() {
     bob.send_over_transport("alice".into(), "hello back".into())
         .unwrap();
     let sent = Instant::now();
-    while !alice.receive_from_peer("bob".into()).unwrap() {
+    // Bob's delivery notice for the first message arrives before his reply.
+    while alice.history("bob".into()).unwrap().len() < 2 {
+        alice.receive_from_peer("bob".into()).unwrap();
         assert!(
             sent.elapsed() < Duration::from_secs(120),
             "reply never arrived"

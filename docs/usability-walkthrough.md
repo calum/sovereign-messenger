@@ -2,6 +2,8 @@
 
 _Written 2026-10-24 for PLAN.md section 7, item 1._
 
+> **Out of date (2026-10-29).** The screens, back handling, tour copy and the wipe-on-stop behaviour described below were replaced in the UX rework (PLAN.md, Decisions, 2026-10-29). Kept as a record of what was reviewed then. It needs a new walkthrough on a device.
+
 This is a code walkthrough. It describes what `TourScreen.kt`, `ChatListScreen.kt`, `ChatScreen.kt`, `MainActivity.kt` and `MeshIndicator.kt` do. It is not a device test. No phone or emulator was available, so nothing here shows that the flow works on a phone. Items under "Human checks" are open until someone runs the app on two phones.
 
 ## Launch
