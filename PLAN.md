@@ -65,7 +65,7 @@ _Last updated: 2026-10-25 (the app starts on a phone; encrypted identity persist
 
 ### 6. Hardening and review
 Findings and evidence are in `docs/hardening-review.md`.
-- [x] Review every `unsafe` block and the `mlock` calls. Done: two `unsafe` blocks, both in `secret.rs`, reviewed. Open problem F2: `munlock` can unlock a page that another live secret shares. Not fixed; the owner must choose a fix (see Decisions, 2026-10-24).
+- [x] Review every `unsafe` block and the `mlock` calls. Done: two `unsafe` blocks, both in `secret.rs`, reviewed. Problem F2 (`munlock` could unlock a page that another live secret shares) is closed: `munlock` was removed (see Decisions, 2026-10-24 and 2026-10-25). One `unsafe` block, the `mlock` call, remains.
 - [x] Find and remove any place where plaintext could reach a log or an exception message. Done: no logging in rust-core or Kotlin `main`, and no leak in panics, Debug output or exceptions. The one real problem, `Key32: Clone`, is fixed with a RED test. Two residual plaintext or key copies (L3, L4) are recorded and not fixed.
 - [ ] Verify `FLAG_SECURE` on a real device (screenshot, screen recording, recents thumbnail). NOT VERIFIED: no device here. The flag is still set in `MainActivity.kt`. Left unticked.
 - [x] Add tests for the Kotlin UI logic that is not just layout. Done: `UpdateStatusTest`, `RetentionCountdownTest`, and three new `TransportStatusTest` cases. Pairing outcome and the QR codec were already tested.

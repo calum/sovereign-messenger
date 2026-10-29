@@ -1,7 +1,22 @@
 # Plan: fix the code-review findings with subagent-driven development
 
 Source: the full review of main at `d822ed2` (2026-10-29). Finding numbers (1, 2.1 to 2.9, D) match that review.
-Nothing here is done yet. Tick a box only when the task's acceptance checks have been run and passed.
+Status 2026-10-29: T1 to T9 and T12 are merged; T10 was dropped; T11 is the docs pass. See the status list below and the Result section at the end. Tick a box only when the task's acceptance checks have been run and passed.
+
+## Status
+
+- [x] T1 role-based ratchet stepping
+- [x] T2 dead-session detection (closes the link)
+- [x] T3 APK receive deadline
+- [x] T4 low-order X25519 rejection
+- [x] T5 crash reports without exception messages
+- [x] T6 identity delete wipes the old core
+- [x] T7 handshake v2, responder ephemeral key
+- [x] T8 part A (per-peer state cleared on forget/unpin); part B (send outside the lock) declined
+- [x] T9 liveness ping
+- [ ] T10 dropped by the owner (not done on purpose)
+- [x] T11 docs match the code (this change)
+- [x] T12 Rust CI (not yet seen running on GitHub)
 
 ## Owner decisions (2026-10-29)
 
@@ -29,9 +44,9 @@ Rules for every task:
 
 ## Wave 0: baseline (orchestrator, no subagent)
 
-- [ ] Restart the branch from `origin/main`.
+- [x] Restart the branch from `origin/main`.
 - [ ] Record the baseline: `mise run rust:lint`, `mise run rust:test`, `mise run rust:test:tor` all green. If the Tor build is red before any change, report that first.
-- [ ] Add the throwaway crossing-messages test from the review as a permanent failing test (`rust-core/tests/ratchet_crossing.rs`) so T1 has a target.
+- [x] Add the throwaway crossing-messages test from the review as a permanent failing test (`rust-core/tests/ratchet_crossing.rs`) so T1 has a target.
 
 ## Wave 1: correctness (blocks everything else)
 
@@ -118,3 +133,31 @@ T3, T4, T5 and T6 start as soon as Wave 0 is done, in parallel with T1, because 
 - `PLAN.md` Decisions lists every behaviour change; `docs/status.md` makes no claim the code does not back.
 - Owner decisions are recorded above; T10 is dropped.
 - Still **not** verified by this plan: anything on a real phone or between two phones, and independent cryptography review. Those stay on `docs/owner-test-list.md`.
+
+## Result (2026-10-29)
+
+Finding numbers are from the review. "Entry" means a dated 2026-10-29 entry in `PLAN.md` Decisions. Nothing below was run on a phone, and none of the crypto changes has had an independent review.
+
+| Finding | Task | What was done | Where |
+|---|---|---|---|
+| 1 ratchet desync | T1 | `DoubleRatchet::new` takes a role; only the initiator is pending after the first handshake-chain key, so DH steps alternate | commits "Make ratchet DH steps role-based so crossing sends cannot desync", "Say the ratchet's alternation assumes in-order links"; entry "ratchet role-based stepping"; `tests/ratchet_crossing.rs` |
+| 1 defence in depth | T2 | 5 consecutive failed opens mark the session dead; `mark_dead` closes the transport so the other side notices | commits "Mark a session dead after repeated failed opens", "Close the link when a session is declared dead"; entry "a session that keeps failing to open is declared dead"; `tests/dead_session.rs` |
+| 2.1 handshake forward secrecy | T7 | handshake v2: responder ephemeral key in a 65-byte challenge frame, new HKDF input and `v2` labels | commits "Add a responder ephemeral key to the handshake", "Say exactly when accept_session spends the pending challenge"; entry "handshake v2" |
+| 2.2 old core not wiped | T6 | identity reset wipes and releases the old core, always deletes the vault, returns the first failure instead of throwing | commits "Wipe the old core when the identity is deleted", "Make the identity reset survive a failing step", "Report identity reset failures instead of throwing them" |
+| 2.3 user text in crash reports | T5 | message printed only for `FacadeException` and a short allow-list | commit "Keep user text out of crash reports" |
+| 2.4 APK receive | T3 | 10-minute overall deadline; buffer grows in 1 MiB steps | commit "Bound APK receive with an overall deadline"; entry "APK receive has an overall deadline" |
+| 2.5 stale per-peer state | T8 A | `forget` and `unpin` clear `read_owed` and `last_seen` | commit "Clear owed receipt and last-seen state when a contact is removed"; `tests/peer_state.rs` |
+| 2.6 no liveness check | T9 | authenticated ping envelope `0x13` after 25 s idle; dead after 75 s of silence | commits "Add a liveness ping and detect half-open links", "Harden liveness: close on failed send, survive freezes, steadier tests"; entry "liveness ping" |
+| 2.7 pairing dials before fingerprints are compared | T10 | not done: dropped by the owner; documented as a known limit | `docs/status.md`, "Known limits" |
+| 2.8 low-order X25519 | T4 | `was_contributory()` checked on every handshake DH; QR decode refuses every small-order key | commit "Refuse low-order X25519 keys in handshake and QR decode"; `tests/low_order_points.rs` |
+| 2.9 lock held across a write | T8 B | declined: the safe version needs a prepare/commit split in crypto-adjacent code; documented as a known limit | entry "per-peer receipt and last-seen state is cleared ... write under the ratchet lock is accepted" |
+| D docs and CI | T11, T12 | docs brought up to date; Rust CI added | commits "Add CI workflow for the Rust checks"; this docs change |
+
+Not done, or only partly done:
+
+- **T8 part B (2.9):** declined. A stalled write can delay incoming frames from that one peer by up to the write timeout.
+- **T10 (2.7):** dropped by the owner. A scanned contact is pinned and dialled within seconds, before fingerprints are compared.
+- **Fallback gap after identity deletion (found by the T6 reviewer):** if starting the new identity fails, `SovereignApp` keeps pointing at the released core until the next launch. The vault is already gone, so that launch starts clean. No fallback core is created.
+- **Wait-role limits:** the dead-session close works because `Transport::close` ends the stream so the dialling side sees an error. The Tor `close` compiles and its suite passes, but no test closes a real onion stream. A handshake-chain message overtaken by the initiator's first DH step is still refused.
+- **Ping compatibility:** a build without the ping is declared dead by a new build after 75 s idle; builds from before handshake v2 cannot connect at all.
+- **Not verified:** anything on a real phone or between two phones, CI on GitHub (the workflow has not been seen running), and the Kotlin changes' build on this machine. No independent cryptography review of the ratchet, handshake v2 or the other changes.

@@ -42,7 +42,8 @@ object CrashReport {
     )
 
     // Matched by name so this file stays pure Kotlin. Nested FacadeException types are named
-    // "uniffi.rust_core.FacadeException$Xxx".
+    // "uniffi.rust_core.FacadeException$Xxx". This relies on the keep rule `-keep class uniffi.** { *; }`
+    // in app/proguard-rules.pro; if R8 renamed these classes the allow-list would silently stop matching.
     private const val FACADE_PREFIX = "uniffi.rust_core.FacadeException"
     private val MESSAGE_SAFE = setOf(
         "java.lang.UnsatisfiedLinkError",

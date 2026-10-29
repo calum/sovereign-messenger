@@ -1,7 +1,8 @@
 package org.sovereign.mesh.core
 
 /**
- * The screen stack, as plain strings so it survives rotation in `rememberSaveable`.
+ * The screen stack, as plain strings (contact names only). It lives in `SovereignApp`'s RAM-only
+ * state, so it survives rotation and is never written to saved instance state or disk.
  * The system back gesture pops one entry; at the root it leaves the app. Pure, so it is
  * tested on the JVM.
  */

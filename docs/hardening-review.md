@@ -1,39 +1,36 @@
 # Hardening review
 
-Date: 2026-10-24; section 5 updated 2026-10-25 for the wire changes. Scope: PLAN.md section 6. Each finding says what was checked, whether it is sound, and what was done. Items that need a phone or an independent party are marked NOT VERIFIED.
+Date: 2026-10-24; section 5 updated 2026-10-25 for the wire changes; F2 to F4 closed and sections 1 and 5 brought up to date 2026-10-29 (the 2026-10-24/25 text is kept where it is history, marked as such). Scope: PLAN.md section 6. Each finding says what was checked, whether it is sound, and what was done. Items that need a phone or an independent party are marked NOT VERIFIED.
 
 ## 1. `unsafe` blocks and `mlock` calls
 
 Method: `grep -rn "unsafe|mlock|munlock" rust-core`.
 
-Result: two `unsafe` blocks, both in `rust-core/src/secret.rs`, both calling `libc` and both behind `#[cfg(unix)]`. No other `unsafe` exists in rust-core. `mlock` and `munlock` are called only from `secret.rs`. `ffi.rs` (`lock_report`) and `store.rs` (`lock_count`) only read the lock state.
+Result as first written: two `unsafe` blocks, both in `rust-core/src/secret.rs`, both calling `libc` and both behind `#[cfg(unix)]`. No other `unsafe` exists in rust-core. `mlock` and `munlock` were called only from `secret.rs`. Update 2026-10-29: `munlock` is no longer called anywhere (see F2), so one `unsafe` block remains: the `mlock` call (`lock`, line 49). `ffi.rs` (`lock_report`) and `store.rs` (`lock_count`) only read the lock state.
 
-### F1. `secret.rs` `lock()`, the `mlock` call (line 47): sound
+### F1. `secret.rs` `lock()`, the `mlock` call (line 49 today): sound
 
 - The pointer and length come from the `Vec<u8>` owned by the `SecretBytes`. `SecretBytes::new` sets the capacity to `max(len, 1)` and fills it once, so the `Vec` is never reallocated and the locked range is the live buffer.
-- On failure `mlock` returns non-zero, `lock` returns `false`, and no `munlock` is attempted later.
+- On failure `mlock` returns non-zero and `lock` returns `false`. (When this was written an `munlock` followed only for a locked buffer; it is gone now, see F2.)
 - An empty buffer returns `true` without a syscall. Nothing is locked, so this is harmless.
 - Not exercised here. On this Windows host `cfg(unix)` is false, so `lock` always returns `false` and the tests never call `mlock`. The Android path has not been run on a device.
 
-### F2. `secret.rs` `unlock()`, the `munlock` call (line 57): REAL PROBLEM, OPEN, NOT FIXED
+### F2. `munlock` unlocking a neighbour's page: REAL PROBLEM, CLOSED 2026-10-24/25 by removing `munlock`
 
-- The call order is correct: the buffer is zeroized, then unlocked, and only if it was locked.
-- The problem is the granularity. Linux and Android lock memory per page, and `munlock` is not reference counted. Unlocking a range clears the lock on every page it touches, including a page that another live `SecretBytes` shares.
-- Stored messages are many small `SecretBytes` (`store.rs`), so they share pages. Dropping one can silently remove the lock from another that is still live.
-- Concrete triggers: `Messenger.lock_report()` builds a 32-byte probe in `ffi.rs` and drops it on every call. `forget` and `wipe_all` drop stored messages.
-- `SecretBytes::is_locked` is set once at construction, so after such an unlock it reports a lock that no longer holds.
-- Why not fixed here: it cannot be reproduced on this host (no Linux, no WSL). Both candidate fixes change memory behaviour and need a Linux test first. Options for the owner:
-  - (a) Give each secret its own page-granular allocation, so the page it locks is never shared, and keep the `munlock`.
-  - (b) Stop calling `munlock`. Locked pages then stay locked until the process ends. The cost is that the locked total follows the heap high-water mark and can use up `RLIMIT_MEMLOCK`, which `is_locked` would then report.
-- A Linux test would read `/proc/self/smaps` `VmFlags` (`lo`) for the page of a live secret, drop a neighbour, and check the flag. That test should exist before either fix is chosen.
+Status: closed. `SecretBytes::drop` in `secret.rs` now zeroizes the buffer and does not call `munlock`; pages stay locked until the process exits. See PLAN.md Decisions, 2026-10-24 "munlock removed (plan A1)" and 2026-10-25 "the allocator test is rewritten". The original finding is kept below because the reasoning still explains the rule.
 
-### F3. `ffi.rs` `lock_report()`: part of F2
+- The problem (as found): Linux and Android lock memory per page, and `munlock` is not reference counted. Unlocking a range clears the lock on every page it touches, including a page that another live `SecretBytes` shares. Stored messages are many small `SecretBytes` (`store.rs`), so they share pages, and dropping one could silently remove the lock from another that was still live. `lock_report()` (a 32-byte probe dropped on every call), `forget` and `wipe_all` were the concrete triggers.
+- The fix taken was option (b) from the original write-up: stop calling `munlock`. The cost is accepted: the locked total follows the heap high-water mark and can use up `RLIMIT_MEMLOCK`, which `SecretBytes::is_locked` reports at construction.
+- Evidence: `rust-core/tests/mlock_neighbour.rs` (Linux only) allocates 1000 small secrets so some must share a page, drops one, and reads `/proc/self/smaps` to check that the neighbour's page is still locked. On Linux it passed, failed when `munlock` was put back in `drop`, and passed again after the revert (PLAN.md Decisions, 2026-10-25). It has not run on Android or on a phone.
+- Option (a), a page-granular allocation per secret, was not chosen.
 
-Creates and drops a `SecretBytes` on every call, which can trigger the unlock in F2. Recorded as the concrete trigger; not changed here.
+### F3. `ffi.rs` `lock_report()`: part of F2, CLOSED with it
 
-### F4. `is_locked` reports at construction time only
+`lock_report()` still creates and drops a probe `SecretBytes` on every call. Since `drop` no longer calls `munlock`, that cannot unlock anyone's page.
 
-Covered by F2. The value is a snapshot, not a live check.
+### F4. `is_locked` reports at construction time only: still true, no longer misleading
+
+The value is still a snapshot taken when the buffer is made. With `munlock` gone, a lock that held at construction stays held until exit, so the snapshot no longer goes stale.
 
 ## 2. Plaintext or key material in logs, panics, Debug output or exceptions
 
@@ -99,16 +96,18 @@ Changes:
 
 Not reviewed by anyone independent. This section lists the points the owner should send for review. Not verified here: nothing in this list has been checked against a formal model.
 
-1. **Static-static DH in the handshake root** (`rust-core/src/handshake.rs`, `derive_root`). The root is HKDF-SHA256 over `ephemeral DH || ML-KEM secret || label || static DH`, with no salt. The static DH authenticates the initiator (the responder compares the static key with its pin). Questions: whether the fixed-length concatenation without a length prefix is unambiguous, and whether a low-order pinned key (which gives an all-zero static term) is acceptable. `was_contributory` is not used.
-2. **First-peer-key bootstrap without a DH step** (`rust-core/src/double_ratchet.rs`). Both sides start from the handshake root with the same chain labels, and the first peer key is accepted without a DH step. This is a deliberate deviation from the standard Double Ratchet (PLAN.md Decisions, "DH ratchet design"). Limits (a) to (c) are listed there. Question: whether the start-up chains give the security the design claims.
+1. **Static-static DH in the handshake root** (`rust-core/src/handshake.rs`, `derive_root`). The root is HKDF-SHA256 over `ephemeral DH || ML-KEM secret || label || static DH`, with no salt. The static DH authenticates the initiator (the responder compares the static key with its pin). Questions: whether the fixed-length concatenation without a length prefix is unambiguous, and whether a low-order pinned key (which gives an all-zero static term) is acceptable. Update 2026-10-29: `was_contributory` is now checked on both DH outputs in `initiate` and `respond`, and a low-order key is refused as `Malformed`; `pairing::decode` refuses every small-order key, not only all-zero (PLAN.md Decisions, 2026-10-29). The root layout and labels are now the `v2` ones, with a responder ephemeral DH term (PLAN.md Decisions, 2026-10-29, handshake v2); the layout described in this item is the 2026-10-24 one. The new layout is also not independently reviewed.
+2. **First-peer-key bootstrap without a DH step** (`rust-core/src/double_ratchet.rs`). Both sides start from the handshake root with the same chain labels, and the first peer key is accepted without a DH step. This is a deliberate deviation from the standard Double Ratchet (PLAN.md Decisions, "DH ratchet design"). Limits (a) to (c) are listed there; limit (a), crossing first steps, was superseded 2026-10-29 by role-based stepping (only the handshake initiator steps first; PLAN.md Decisions, 2026-10-29), which is itself not independently reviewed. Limit (b), a handshake-chain message overtaken by the initiator's first step is refused, still applies. Question: whether the start-up chains give the security the design claims.
 3. **Skipped-key cache bounds** (`rust-core/src/ratchet.rs`). `MAX_SKIP` 100 counters per receive, `MAX_CACHED_KEYS` 100 keys per cache, oldest key evicted. Question: whether the bounds are safe against an attacker who can send forged large counters, and whether the eviction policy leaves a gap for an attacker who forces evictions.
-4. **TOFU pin model and handshake replay** (`rust-core/src/ffi.rs`, `pin_or_check`, `scan_pairing`, `unpin`; `rust-core/src/handshake.rs`). Pins are made on first use, held in RAM, and survive `forget` and `wipe_all`. A different key is refused with `PinChanged`. Question: whether the first-contact pin is safe when a stranger can reach a listener before the real peer does. **Handshake replay, changed since the 2026-10-24 review (fix to be checked):** the responder sends a fresh 32-byte challenge once per connection (frame tag `0x03`), and the initiator's handshake (tag `0x01`) ends with a confirmation tag, HMAC-SHA256 keyed with the root over the public handshake values and the challenge. The challenge is also an input to the root. A captured handshake replayed to a later connection carries an old challenge, so the tag fails and no session is stored. Tests: `rust-core/tests/handshake_replay.rs`. Question for the reviewer: whether the binding, the tag construction and the one-time use of each challenge are sound. Not tested between two phones.
+4. **TOFU pin model and handshake replay** (`rust-core/src/ffi.rs`, `pin_or_check`, `scan_pairing`, `unpin`; `rust-core/src/handshake.rs`). Pins are made on first use, held in RAM, and survive `forget` and `wipe_all`. A different key is refused with `PinChanged`. Question: whether the first-contact pin is safe when a stranger can reach a listener before the real peer does. **Handshake replay, changed since the 2026-10-24 review (fix to be checked):** the responder sends a fresh 32-byte challenge once per connection (frame tag `0x03`; since 2026-10-29 the frame is 65 bytes, the challenge plus a responder ephemeral X25519 public key), and the initiator's handshake (tag `0x01`) ends with a confirmation tag, HMAC-SHA256 keyed with the root over the public handshake values and the challenge. The challenge is also an input to the root. A captured handshake replayed to a later connection carries an old challenge, so the tag fails and no session is stored. Tests: `rust-core/tests/handshake_replay.rs`. Question for the reviewer: whether the binding, the tag construction and the one-time use of each challenge are sound. Not tested between two phones. Also since 2026-10-29: a session that fails to open 5 frames in a row, or hears nothing for 75 s, is declared dead and its link closed, and a small ping goes out after 25 s idle (PLAN.md Decisions, 2026-10-29).
 5. **Signed-update format and rollback, changed since the 2026-10-24 review (fix to be checked)** (`rust-core/src/update.rs`, `rust-core/src/apk_transfer.rs`). The update frame is v2: a detached 64-byte Ed25519 signature over `sovereign-p2p update v2` || version (u64 big-endian) || APK, then a 4-byte big-endian length with a 64 MiB cap. The version is inside the signed bytes, so a version edited in transit fails the signature. `verify_update` checks the signature first, then refuses any version that is not strictly greater than the installed version (`CoreError::Downgrade`), so an equal or older build is refused. The installed version comes from the app (`longVersionCode`), not from the peer. Questions for the reviewer: whether the signed message is unambiguous, whether the rollback rule holds when the installed version cannot be read (every update is refused in that case), and whether the single developer key needs rotation or key-ID support. Android's installer downgrade check was not verified and is not relied on.
 6. **Two-code pairing QR** (`rust-core/src/pairing.rs`, `split`, `Assembler`). The v1 payload is sent as two QR codes. Each part has a 10-byte header (index, count `2`, and an 8-byte id: the first 8 bytes of SHA-256 over `sovereign-p2p v1 pairing part id` and the whole payload). Reassembly refuses a missing, duplicated or mismatched part, and refuses a complete set whose joined bytes do not match the id. Question for the reviewer: whether an unkeyed, truncated hash is adequate as an integrity check across parts. It is not authentication; the fingerprint compared in person is the trust step. Not scanned by a camera on a phone.
 
 Also noted: the frame header is bound as associated data (`ratchet.rs` `aead_seal`, `double_ratchet.rs` `header_bytes`). The skipped-key cache wipe on drop is verified by a test that reads the cache in place (`skip_cache_wipe_zeroizes_every_stored_key`), not by reading freed memory.
 
 ## Verification
+
+The table is the 2026-10-24/25 record and its counts are not current; `mise run check` is the source of truth, and the 2026-10-29 fixes ran their own checks (see PLAN.md Decisions).
 
 | Command | Result |
 | --- | --- |
@@ -118,7 +117,7 @@ Also noted: the frame header is bound as associated data (`ratchet.rs` `aead_sea
 | `.\gradlew.bat :app:testDebugUnitTest --rerun-tasks` (JAVA_HOME JDK 17) | BUILD SUCCESSFUL, 33 tests, 0 failures (`PairingCodecTest.scannedPayloadPinsThroughTheCore` passed on this run) |
 | `cargo test --offline` in `rust-core`, 2026-10-25 docs pass | 155 passed (count unchanged by this pass; doc comments only) |
 
-Not verified: FLAG_SECURE on a device; `mlock` on Android or Linux (F1, F2); the independent cryptography review; any run between two phones; the update send from the Updates screen; the two-code QR scan with a camera.
+Not verified: FLAG_SECURE on a device; `mlock` on Android (F1; the F2 neighbour test passed on Linux only); the independent cryptography review; any run between two phones; the update send from the Updates screen; the two-code QR scan with a camera.
 
 ## 6. Tor metadata review (preliminary, 2026-10-25)
 
