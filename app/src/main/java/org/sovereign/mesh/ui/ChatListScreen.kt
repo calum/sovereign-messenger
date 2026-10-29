@@ -30,7 +30,7 @@ import org.sovereign.mesh.core.torStatusText
 
 @Composable
 fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: () -> Unit) {
-    val peers = SovereignApp.core.peers()
+    val peers = chatListPeers(SovereignApp.core.pinnedPeers(), SovereignApp.core.peers())
     var confirmDelete by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -75,7 +75,7 @@ fun ChatListScreen(onOpenChat: (String) -> Unit, onPair: () -> Unit, onUpdate: (
 
         if (peers.isEmpty()) {
             Text(
-                "No chats yet. Meet a friend in person and scan their QR code to start.",
+                "No contacts yet. Meet a friend in person and scan their QR code to pair.",
                 modifier = Modifier.padding(top = 24.dp),
             )
         } else {
@@ -109,6 +109,14 @@ private fun DeleteIdentityDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
 
 /** The chat list title. It must not say "secured" until the app can back that claim (CLAUDE.md rule 7). */
 internal const val chatListTitle = "P2P Mesh"
+
+/**
+ * Every pinned contact plus any peer with a live session. A pinned contact has no session
+ * until the first connection, and the chat screen is where that connection is made, so
+ * listing only sessions left a freshly paired contact with no way to open a chat.
+ */
+internal fun chatListPeers(pinned: List<String>, sessions: List<String>): List<String> =
+    (pinned + sessions).distinct().sorted()
 
 /** What the user is told before a delete. It names the cost; there is no recovery. */
 internal const val deleteIdentityWarning =
