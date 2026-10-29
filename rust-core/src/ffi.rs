@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -213,7 +213,15 @@ struct Session {
     /// Set when a send or receive on the link failed. A dead link reads as not connected
     /// until a new handshake replaces the session.
     dead: AtomicBool,
+    /// Frames in a row that failed to open or decode. Any good frame resets it. At
+    /// `MAX_BAD_OPENS` the session is marked dead so the app runs a new handshake instead
+    /// of polling a desynchronised ratchet forever. Touches no lock.
+    bad_opens: AtomicU32,
 }
+
+/// Consecutive failed opens after which a session is declared dead. One forged or
+/// damaged frame between good ones never gets here.
+const MAX_BAD_OPENS: u32 = 5;
 
 struct State {
     identity: Identity,
@@ -862,12 +870,24 @@ impl Messenger {
                 return Err(e.into());
             }
         };
-        let plaintext = {
+        let opened = {
             let mut ratchet = lock_ratchet(&session.ratchet)?;
-            Zeroizing::new(wire::open_frame(&mut ratchet, &frame)?)
+            wire::open_frame(&mut ratchet, &frame)
+        };
+        let plaintext = match opened {
+            Ok(p) => Zeroizing::new(p),
+            Err(e) => return Err(self.note_bad_open(&peer_id, &session, e)),
         };
         self.lock()?.last_seen.insert(peer_id.clone(), now_ms());
-        if let Some(id) = self.apply_opened(&peer_id, &plaintext)? {
+        let applied = match self.apply_opened(&peer_id, &plaintext) {
+            Ok(applied) => applied,
+            Err(FacadeError::Malformed) => {
+                return Err(self.note_bad_open(&peer_id, &session, CoreError::Malformed))
+            }
+            Err(e) => return Err(e),
+        };
+        session.bad_opens.store(0, Ordering::Relaxed);
+        if let Some(id) = applied {
             // Best effort: if this fails the message is still stored, and the contact
             // sees it as sent rather than delivered.
             let _ = self.send_sealed(&session, &link, &envelope::encode_delivered(id));
@@ -1122,6 +1142,19 @@ impl Messenger {
         })
     }
 
+    /// Counts one frame that failed to open (authentication or format). After
+    /// `MAX_BAD_OPENS` in a row the session is marked dead, which `linked_peers` reports
+    /// so the app redials and runs a new handshake. Returns the error to hand back.
+    fn note_bad_open(&self, peer_id: &str, session: &Session, e: CoreError) -> FacadeError {
+        if matches!(e, CoreError::Auth | CoreError::Malformed) {
+            let n = session.bad_opens.fetch_add(1, Ordering::Relaxed) + 1;
+            if n >= MAX_BAD_OPENS {
+                self.mark_dead(peer_id, session);
+            }
+        }
+        e.into()
+    }
+
     /// Marks the session's link dead and records when the contact was last seen.
     fn mark_dead(&self, peer_id: &str, session: &Session) {
         session.dead.store(true, Ordering::Relaxed);
@@ -1318,6 +1351,7 @@ fn session_for(
         ratchet: Mutex::new(DoubleRatchet::new(root, role, send_label, recv_label)),
         link,
         dead: AtomicBool::new(false),
+        bad_opens: AtomicU32::new(0),
     }
 }
 
