@@ -109,6 +109,16 @@ class CoreBridge(
         messenger.wipeAll()
     }
 
+    /**
+     * Ends this core for good: wipes it, then releases the native Messenger. Used when the
+     * identity is deleted, so the old identity, sessions and chats do not wait for the GC.
+     * Any later call on this bridge fails, which is intended.
+     */
+    fun close() {
+        messenger.wipeAll()
+        messenger.close()
+    }
+
     /** Whether the OS honoured `mlock` for the core's memory. Counts only, no content. */
     fun lockReport(): LockReport = messenger.lockReport()
 
@@ -202,4 +212,27 @@ class CoreBridge(
      */
     fun sendUpdate(addr: String, timeoutSecs: Int, apk: ByteArray, version: Long, signature: ByteArray) =
         messenger.sendUpdate(addr, timeoutSecs.toUInt(), apk, version.toULong(), signature)
+}
+
+/**
+ * The order of an identity reset, kept apart from the Application so a JVM test can run it.
+ * Background work stops first so nothing races the wipe; the old core is wiped and released
+ * before the vault goes, so no plaintext of the old identity outlives the delete; the new
+ * identity starts last. [release] defaults to [CoreBridge.close]; tests observe the wiped core.
+ */
+internal fun resetIdentity(
+    old: CoreBridge,
+    stopConnections: () -> Unit,
+    stopTor: () -> Unit,
+    deleteLocalFiles: () -> Unit,
+    deleteVault: () -> Unit,
+    startNew: () -> Unit,
+    release: (CoreBridge) -> Unit = { it.close() },
+) {
+    stopConnections()
+    stopTor()
+    deleteLocalFiles()
+    release(old)
+    deleteVault()
+    startNew()
 }
